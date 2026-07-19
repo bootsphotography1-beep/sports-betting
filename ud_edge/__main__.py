@@ -411,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Source name for --ingest-csv (default: prizepicks).")
     parser.add_argument("--ingest-prizepicks-clipboard", action="store_true",
                         help="Read the PrizePicks board from the Windows clipboard and ingest it.")
+    parser.add_argument("--ingest-propline", action="store_true",
+                        help="With --snapshot, also pull PrizePicks/Sleeper/Dabble/Pinnacle "
+                             "props from PropLine (requires PROPLINE_API_KEY).")
 
     args = parser.parse_args(argv)
 
@@ -484,6 +487,32 @@ def main(argv: list[str] | None = None) -> int:
             captured_at = utc_now()
             rows = capture_underdog(legs, store, captured_at=captured_at)
             print(f"[snapshot] captured {len(rows)} observations at {captured_at.isoformat()}")
+
+            # PropLine second sources (opt-in): --ingest-propline
+            if getattr(args, "ingest_propline", False):
+                try:
+                    from ud_edge.propline_client import (
+                        propline_configured, PropLineClient, fetch_line_observations,
+                    )
+                    if propline_configured():
+                        pl = PropLineClient(
+                            cache_path=cache_path.parent / "sharp_cache" / "propline",
+                        )
+                        for sport_id in ("MLB", "NBA", "WNBA", "NHL", "NFL"):
+                            obs = fetch_line_observations(pl, sport_id)
+                            by_source: dict[str, list] = {}
+                            for o in obs:
+                                by_source.setdefault(o["source"], []).append(o)
+                            for src, src_obs in by_source.items():
+                                ids = capture_from_observations(
+                                    src_obs, store, source=src, captured_at=captured_at,
+                                )
+                                print(f"[snapshot] PropLine/{src}/{sport_id}: "
+                                      f"{len(ids)} observations")
+                    else:
+                        print("[snapshot] --ingest-propline set but no PROPLINE_API_KEY")
+                except Exception as e:
+                    print(f"[snapshot] PropLine ingest skipped (error: {e})")
 
         # ── Ingest CSV board as a second source ─────────────────────────────
         if args.ingest_csv:

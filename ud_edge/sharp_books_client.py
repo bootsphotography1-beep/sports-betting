@@ -245,7 +245,9 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
     # 3. PropLine (prop-line.com) — activate when PROPLINE_API_KEY is provided
     if propline_key and propline_sports:
         try:
-            from ud_edge.propline_client import PropLineClient, fetch_sharp_props
+            from ud_edge.propline_client import (
+                PropLineClient, fetch_sharp_props, BOOK_PRIORITY,
+            )
             pl = PropLineClient(
                 api_key=propline_key,
                 cache_path=(cache_path / "propline") if cache_path else None,
@@ -253,6 +255,14 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
             for sport in propline_sports:
                 for p in fetch_sharp_props(pl, sport):
                     key = f"{_normalize_name(p['player'])}|{p['stat']}"
+                    new_pri = BOOK_PRIORITY.get(p.get("book_key", ""), 0)
+                    old = index.get(key)
+                    if old is not None:
+                        old_src = (old.get("source") or "")
+                        old_book = old_src.replace("propline-", "") if old_src.startswith("propline-") else ""
+                        old_pri = BOOK_PRIORITY.get(old_book, 0)
+                        if new_pri < old_pri:
+                            continue
                     index[key] = {
                         "over_decimal": p["over_decimal"],
                         "under_decimal": p["under_decimal"],

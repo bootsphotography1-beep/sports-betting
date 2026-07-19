@@ -204,13 +204,16 @@ response, including the DFS/exchange sources we care about:
 | `pinnacle` / `draftkings` / `fanduel` | Same-side sharp true-prob / mispricing |
 | `kalshi` / `polymarket` | Exchange / prediction markets (mostly game lines today) |
 
-**To activate:** export `PROPLINE_API_KEY=...` (client scaffold lives in
-[`ud_edge/propline_client.py`](ud_edge/propline_client.py)). Until the key is
-set, the bot keeps using live Underdog + manual CSV / optional SportsGameOdds.
+**To activate:** put `PROPLINE_API_KEY=...` in `.env` (see `.env.example`).
+With the key set, `--once` automatically builds the sharp index from PropLine
+(Pinnacle/DK/FD/Sleeper/Dabble/Underdog). For multi-source stale detection:
 
-**Currently wired into snapshot history without PropLine:** Underdog Fantasy
-(live) and `--ingest-csv` / `--ingest-prizepicks-clipboard`. PropLine snapshot
-ingestion for PrizePicks/Sleeper/Dabble is next once the key is plugged in.
+```bash
+python -m ud_edge --snapshot --ingest-propline --save reports/stale_propline.md
+```
+
+That pulls PrizePicks + Sleeper + Dabble + Pinnacle props into the snapshot DB
+alongside live Underdog.
 
 ## Mispricing workflow (sharp-book cross-reference)
 
