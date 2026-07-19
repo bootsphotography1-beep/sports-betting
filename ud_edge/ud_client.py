@@ -182,6 +182,7 @@ class UDClient:
                     player_id=player.id,
                     player_name=player.full_name,
                     sport_id=player.sport_id,
+                    team_id=app.team_id or player.team_id,
                     match_id=app.match_id,
                     match_title=game.abbreviated_title if game else None,
                     scheduled_at=game.scheduled_at if game else None,

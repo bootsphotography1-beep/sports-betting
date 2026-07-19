@@ -428,8 +428,31 @@ def main(argv: list[str] | None = None) -> int:
                         help="PropLine daily call budget (default 5000).")
     parser.add_argument("--alert-pp", type=float, default=1.5,
                         help="Minimum same-side mispricing (pp) to push an alert (default 1.5).")
+    parser.add_argument("--analyze-corr", action="store_true",
+                        help="Run correlation analyzer on today's top/last-minute "
+                             "mispriced MLB slip (pair links + outcome scenarios).")
 
     args = parser.parse_args(argv)
+
+    if args.analyze_corr:
+        from ud_edge.dashboard import collect_mispriced
+        from ud_edge.correlation import analyze_and_format
+        from ud_edge.matcher import build_lineups
+        mispriced, urgent, meta = collect_mispriced(min_mispricing_pp=args.alert_pp)
+        # Prefer last-minute stack if ≥2 legs; else top mispriced 6-flex
+        pool = [r for _, r in urgent] if len(urgent) >= 2 else mispriced
+        if not pool:
+            print("[corr] no mispriced legs to analyze")
+            return 1
+        if len(pool) >= 6:
+            lineups = build_lineups(pool, n_entries=1, n_legs=6, diversify=False)
+            slip = lineups[0] if lineups else pool[:6]
+        else:
+            slip = pool
+        print(f"[corr] analyzing {len(slip)}-leg slip "
+              f"({'last-minute' if len(urgent) >= 2 else 'slate'} mispriced)")
+        print(analyze_and_format(slip, entry_type=args.entry))
+        return 0
 
     if args.dashboard:
         from ud_edge.dashboard import write_dashboard

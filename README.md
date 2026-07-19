@@ -233,6 +233,20 @@ python -m ud_edge --poll --alert-pp 1.5
 
 Optional: `SLACK_WEBHOOK_URL` or `DISCORD_WEBHOOK_URL` in `.env`.
 
+### Correlation analyzer
+
+```bash
+python -m ud_edge --analyze-corr
+```
+
+Labels same-game / same-team / QB–WR / pitcher–batter links as **positive**
+or **fighting**, estimates P(sweep) with vs without correlation, shows
+outcome bins (wipeout / hook / sweep), and recommends **flex vs power**.
+Also embedded in Markdown reports and the HTML dashboard.
+
+**Rule of thumb (from stack theory):** same script + same direction → stack /
+consider power. Opposite directions on linked players → do not parlay.
+
 ## Mispricing workflow (sharp-book cross-reference)
 
 Priority when building the sharp index (later overrides earlier):

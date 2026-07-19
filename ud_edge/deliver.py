@@ -122,6 +122,14 @@ def build_report(
             f"{ud_pct} | {sharp_pct} | {delta_str} | {sharp_book_str} |"
         )
     md.append("")
+    if top_legs:
+        try:
+            from ud_edge.correlation import analyze_and_format
+            md.append(analyze_and_format(top_legs, entry_type=entry_type))
+            md.append("")
+        except Exception as e:
+            md.append(f"_Correlation analysis skipped ({e})_")
+            md.append("")
     md.append("---")
     md.append("")
     md.append(f"_Math: no-vig calc on UD's own two-sided decimal odds. "
@@ -248,6 +256,14 @@ def build_multi_report(
                 f"{ud_pct} | {sharp_pct} | {delta_str} | {sharp_book_str} |"
             )
         md.append("")
+        # Correlation analyzer (OddsJuice-style stack / flex-vs-power guidance)
+        try:
+            from ud_edge.correlation import analyze_and_format
+            md.append(analyze_and_format(lineup, entry_type=entry_type))
+            md.append("")
+        except Exception as e:
+            md.append(f"_Correlation analysis skipped ({e})_")
+            md.append("")
         md.append("---")
         md.append("")
 

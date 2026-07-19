@@ -280,6 +280,20 @@ section:nth-of-type(3) { animation-delay: 0.2s; }
   margin-bottom: 8px;
 }
 
+.corr {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: rgba(0,0,0,0.25);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+.corr strong, .corr b { color: var(--signal); font-weight: 600; }
+.corr .warn { color: var(--warn); }
+
 footer {
   margin-top: 48px;
   padding-top: 16px;
@@ -458,6 +472,26 @@ def render_dashboard_html(
     if not all_blocks:
         all_blocks.append('<p class="empty">No mispriced legs cleared the ≥1.5pp same-side gate.</p>')
 
+    # Correlation on last-minute stack (if 2+ legs)
+    corr_html = ""
+    try:
+        from ud_edge.correlation import analyze_and_format
+        import html as _html
+        if len(urgent) >= 2:
+            urgent_legs = [r for _, r in urgent[:6]]
+            corr_txt = analyze_and_format(urgent_legs, entry_type="6-flex")
+            corr_html = f"""
+<section>
+  <div class="sec-head">
+    <h3>Correlation · last-minute stack</h3>
+    <span>possible outcomes if legs share a script</span>
+  </div>
+  <div class="corr">{_html.escape(corr_txt)}</div>
+</section>
+"""
+    except Exception as e:
+        corr_html = f'<section><p class="empty">Correlation skipped: {e}</p></section>'
+
     # Diversified lineup from mispriced pool
     lineup_html = ""
     lineups = build_lineups(
@@ -472,6 +506,13 @@ def render_dashboard_html(
         for j, r in enumerate(lineup, 1):
             mins = _mins_until(r.leg.scheduled_at, now)
             rows.append(_pick_block(r, mins, j))
+        try:
+            from ud_edge.correlation import analyze_and_format
+            import html as _html
+            corr_lineup = _html.escape(analyze_and_format(lineup, entry_type="6-flex"))
+            corr_block = f'<div class="corr">{corr_lineup}</div>'
+        except Exception:
+            corr_block = ""
         lineup_html = f"""
 <section>
   <div class="sec-head">
@@ -479,8 +520,9 @@ def render_dashboard_html(
     <span>avg {avg:.1%} · EV {ev:+.3f}/$1 · win ~{win:.0%}</span>
   </div>
   <div class="lineup">
-    <p class="ev">Build this card in <strong style="color:var(--app)">Underdog Fantasy</strong> — 6-flex entry.</p>
+    <p class="ev">Build this card in <strong style="color:var(--app)">Underdog Fantasy</strong> — check correlation before submitting.</p>
     {''.join(rows)}
+    {corr_block}
   </div>
 </section>
 """
@@ -525,6 +567,8 @@ def render_dashboard_html(
       </div>
       {''.join(urgent_blocks)}
     </section>
+
+    {corr_html}
 
     {lineup_html}
 
