@@ -284,17 +284,16 @@ from `/beta/v5/over_under_lines`. ~6,700 lines today across 17 sports. **Free, u
 
 **Sharp-book cross-reference (mispricing detection):**
 
-- **Manual CSV source** (`data/sharp_lines.csv`) — works today, no signup.
+- **PropLine free tier** (preferred) — set `PROPLINE_API_KEY` in `.env`.
+  Live player props from Pinnacle / DraftKings / FanDuel / BetMGM plus
+  PrizePicks / Sleeper. Free: 1,000 req/day, no credit card.
+  Sign up at [prop-line.com](https://prop-line.com).
+- **Manual CSV** (`data/sharp_lines.csv`) — works without any API key.
   Format: `player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker`.
-  ~5 min/day to update.
-- **SportsGameOdds free tier** (auto source) — sign up at [sportsgameodds.com](https://sportsgameodds.com),
-  export `SPORTSGAMEODDS_KEY=...`. Advertised free-tier coverage includes books such as
-  FanDuel, DraftKings, BetMGM, Caesars, and ESPN BET; Pinnacle is not included.
-  Validate the adapter against your live key before relying on its parsed props.
-- Mispricings where the sharp book's true prob differs from UD's by ≥2pp
-  are flagged in the report (Δ column, bolded when |Δ| ≥ 2pp).
-- Legs where the sharp book gives HIGHER confidence than UD are boosted
-  to the top of the ranking.
+- **SportsGameOdds free tier** — set `SPORTSGAMEODDS_KEY`. Soft books on free;
+  Pinnacle is paid-tier there.
+- Mispricings where the sharp book's **same-side** true prob exceeds UD's by
+  ≥2pp are boosted to the top of the ranking.
 
 **Secondary cross-reference:** [apisports.io](https://apisports.io) (free tier)
 - 100 req/day budget — cache aggressively
