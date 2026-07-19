@@ -14,22 +14,21 @@ from ud_edge.results_tracker import (
 
 # ── american_to_implied ────────────────────────────────────────────────────
 class TestAmericanToImplied:
-    def test_minus_110_is_47_62_pct(self):
-        # -110 = 100/(100+110) = 0.47619
-        assert abs(american_to_implied(-110) - 0.47619) < 0.001
+    def test_minus_110_is_52_38_pct(self):
+        # Favorite -110 → |odds|/(|odds|+100) = 110/210 ≈ 0.52381
+        assert abs(american_to_implied(-110) - 0.52381) < 0.001
 
     def test_plus_110_is_47_62_pct(self):
-        # +110 = 110/(110+100) = 0.52381? No wait: +110 = 110/210 = 0.52381
-        # But that means at -110/+110, the favorite is UNDER (-110) at 47.62%.
-        assert abs(american_to_implied(110) - 0.52381) < 0.001
+        # Underdog +110 → 100/(odds+100) = 100/210 ≈ 0.47619
+        assert abs(american_to_implied(110) - 0.47619) < 0.001
 
-    def test_minus_200_is_33_33_pct(self):
-        # -200 = 100/(100+200) = 0.3333
-        assert abs(american_to_implied(-200) - 0.33333) < 0.001
+    def test_minus_200_is_66_67_pct(self):
+        # Favorite -200 → 200/300 ≈ 0.66667
+        assert abs(american_to_implied(-200) - 0.66667) < 0.001
 
-    def test_plus_200_is_66_67_pct(self):
-        # +200 = 200/300 = 0.66667
-        assert abs(american_to_implied(200) - 0.66667) < 0.001
+    def test_plus_200_is_33_33_pct(self):
+        # Underdog +200 → 100/300 ≈ 0.33333
+        assert abs(american_to_implied(200) - 0.33333) < 0.001
 
     def test_zero_raises(self):
         with pytest.raises(ValueError):
@@ -322,13 +321,12 @@ class TestSharpBooksClient:
         assert idx["test player|points"]["source"] == "manual-csv"
 
     def test_rank_legs_with_sharp_book_boosts_mispricings(self):
-        """Legs where the sharp book gives a higher true prob should rank higher."""
+        """Legs where the sharp book gives a higher SAME-SIDE true prob should rank higher."""
         from ud_edge.matcher import rank_legs
         from ud_edge.models import Leg
 
         # Use strong asymmetric pricing so both legs clear 0.55 threshold
-        # -145/+125 implies ~55.6% over → 0.5324/0.4676 after vig — too low
-        # -160/+135 implies ~61.5% over → ~58.4% true after vig (clears threshold)
+        # -160/+135 → true ~0.5912 higher / 0.4088 lower
         leg_normal = Leg(line_id="1", player_id="p1", player_name="Player A",
                          sport_id="NBA", stat_name="points", line_value=27.5,
                          line_type="balanced",
@@ -340,11 +338,7 @@ class TestSharpBooksClient:
                             higher_american=-160, higher_decimal=1.625, higher_multiplier=0.95,
                             lower_american=135, lower_decimal=2.35, lower_multiplier=0.95)
         legs = [leg_normal, leg_mispriced]
-        # UD: -160/+135 → implied 0.6154+0.4255 = 1.0409 → true 0.5912/0.4088
-        # Pinnacle: -180/+155 → implied 0.6429+0.6077 = 1.0861... wait that's wrong
-        # Let's instead make Pinnacle use a tighter spread (lower overround):
-        # Pinnacle: -170/+145 → 1.588/2.45 → implied 0.6296+0.4082 = 1.0378 → true 0.6066/0.3934
-        # Now UD best=0.5912, Pinnacle best=0.6066 → mispricing edge = +1.54pp ✓
+        # Pinnacle agrees on Higher with higher same-side prob (~0.6066)
         sharp = {
             "player a|points": {"over_decimal": 1.588, "under_decimal": 2.45,
                                 "bookmaker": "Pinnacle", "line_value": 27.5,
@@ -352,16 +346,90 @@ class TestSharpBooksClient:
             # Player B is NOT in the sharp index — no cross-ref
         }
         ranked = rank_legs(legs, break_even=0.5495, injury_index=None, sharp_book_index=sharp)
-        # Both legs should be present
         assert len(ranked) == 2, f"expected 2 legs, got {len(ranked)}: {ranked}"
-        # Player A should rank first because the sharp book boosts it (mispricing signal)
+        # Player A should rank first because the sharp book boosts same-side Higher
         assert ranked[0].leg.player_name == "Player A"
+        assert ranked[0].picked_side == "higher"
         assert ranked[0].sharp_true_prob is not None
+        assert ranked[0].sharp_true_prob > 0.5  # same-side agreement
         assert ranked[0].mispricing_edge_pp is not None
-        assert ranked[0].mispricing_edge_pp > 0  # sharp book gives higher prob
-        # Player B has no sharp entry — falls back to UD-implied edge
+        assert ranked[0].mispricing_edge_pp > 0  # sharp gives higher same-side prob
         assert ranked[1].leg.player_name == "Player B"
         assert ranked[1].sharp_true_prob is None
+
+    def test_rank_legs_sharp_disagreement_uses_same_side_and_demotes(self):
+        """If sharp favors the opposite side, use same-side prob and demote/filter."""
+        from ud_edge.matcher import rank_legs, effective_true_prob
+        from ud_edge.models import Leg
+
+        # UD strongly favors Higher (~0.5912)
+        leg_a = Leg(line_id="1", player_id="p1", player_name="Disagree A",
+                    sport_id="NBA", stat_name="points", line_value=27.5,
+                    line_type="balanced",
+                    higher_american=-160, higher_decimal=1.625, higher_multiplier=0.95,
+                    lower_american=135, lower_decimal=2.35, lower_multiplier=0.95)
+        # UD-only control (same pricing, no sharp) — should survive
+        leg_b = Leg(line_id="2", player_id="p2", player_name="Control B",
+                    sport_id="NBA", stat_name="points", line_value=27.5,
+                    line_type="balanced",
+                    higher_american=-160, higher_decimal=1.625, higher_multiplier=0.95,
+                    lower_american=135, lower_decimal=2.35, lower_multiplier=0.95)
+        # Sharp flips: under heavily favored → same-side (higher) prob << 50%
+        # over=2.45, under=1.588 → true_over≈0.3934, true_under≈0.6066
+        sharp = {
+            "disagree a|points": {"over_decimal": 2.45, "under_decimal": 1.588,
+                                  "bookmaker": "Pinnacle", "line_value": 27.5,
+                                  "source": "test"},
+        }
+        ranked = rank_legs(
+            [leg_a, leg_b],
+            break_even=0.5495,
+            min_true_prob=0.55,
+            sharp_book_index=sharp,
+        )
+        names = [r.leg.player_name for r in ranked]
+        # Disagreement should filter out Disagree A (effective_prob = sharp higher ≈ 0.39)
+        assert "Disagree A" not in names
+        assert "Control B" in names
+
+        # Unit-level: same-side helper is conservative on disagreement
+        assert effective_true_prob(0.59, 0.39) == 0.39
+        assert effective_true_prob(0.59, 0.61) == 0.61
+        assert effective_true_prob(0.59, None) == 0.59
+
+    def test_rank_legs_sharp_agree_same_side_not_opposite_favorite(self):
+        """sharp_true_prob must be same-side, not the sharp book's overall favorite."""
+        from ud_edge.matcher import rank_legs
+        from ud_edge.models import Leg
+        from ud_edge.no_vig import no_vig
+
+        leg = Leg(line_id="1", player_id="p1", player_name="Same Side",
+                  sport_id="NBA", stat_name="points", line_value=27.5,
+                  line_type="balanced",
+                  higher_american=-160, higher_decimal=1.625, higher_multiplier=0.95,
+                  lower_american=135, lower_decimal=2.35, lower_multiplier=0.95)
+        # Sharp mildly favors under — opposite of UD's Higher pick
+        # over=2.10, under=1.80 → true_over≈0.4615, true_under≈0.5385
+        sharp = {
+            "same side|points": {"over_decimal": 2.10, "under_decimal": 1.80,
+                                 "bookmaker": "DK", "line_value": 27.5,
+                                 "source": "test"},
+        }
+        s_over, s_under, _ = no_vig(2.10, 1.80)
+        # Lower gates so the disagreeing leg is retained for inspection
+        ranked = rank_legs(
+            [leg],
+            break_even=0.50,
+            min_true_prob=0.0,
+            min_edge_pp=-100.0,
+            sharp_book_index=sharp,
+        )
+        assert len(ranked) == 1
+        assert ranked[0].picked_side == "higher"
+        # Must be same-side (higher), NOT the sharp favorite (under)
+        assert abs(ranked[0].sharp_true_prob - s_over) < 1e-6
+        assert ranked[0].sharp_true_prob < s_under
+        assert ranked[0].sharp_true_prob < 0.5
 
 
 # ── build_lineups (multi-entry 6-flex builder) ──────────────────────────────
@@ -458,6 +526,61 @@ class TestBuildLineups:
         # 3 × 6 = 18 unique legs
         all_ids = sum([[r.leg.line_id for r in l] for l in lineups], [])
         assert len(set(all_ids)) == 18
+
+    def test_diversify_avoids_same_player_and_game(self):
+        """Prefer unique players / games within an entry when alternatives exist."""
+        from ud_edge.models import Leg, RankedLeg
+
+        ranked = []
+        # Two legs from same player/game first (best edge), then 5 unique fillers
+        for i, (pid, mid, name) in enumerate([
+            ("p0", 100, "Dup Player"),
+            ("p0", 100, "Dup Player"),  # same player + game
+            ("p1", 1, "P1"),
+            ("p2", 2, "P2"),
+            ("p3", 3, "P3"),
+            ("p4", 4, "P4"),
+            ("p5", 5, "P5"),
+        ]):
+            prob = 0.60 - i * 0.005
+            leg = Leg(
+                line_id=f"dup_l{i}", player_id=pid, player_name=name,
+                sport_id="NBA", match_id=mid, match_title=f"M{mid}",
+                stat_name="points", line_value=27.5, line_type="balanced",
+                higher_american=-145, higher_decimal=1.69, higher_multiplier=0.86,
+                lower_american=125, lower_decimal=2.25, lower_multiplier=1.10,
+            )
+            ranked.append(RankedLeg(
+                leg=leg, higher_true_prob=prob, higher_implied_prob=0.55,
+                higher_edge_pp=(prob - 0.5495) * 100,
+                lower_true_prob=1 - prob, lower_implied_prob=0.45,
+                lower_edge_pp=((1 - prob) - 0.5495) * 100,
+                picked_side="higher", picked_true_prob=prob,
+                picked_edge_pp=(prob - 0.5495) * 100, overround=1.05,
+            ))
+        lineups = build_lineups(ranked, n_entries=1, n_legs=6, diversify=True)
+        assert len(lineups) == 1
+        players = [r.leg.player_id for r in lineups[0]]
+        assert players.count("p0") == 1, f"expected 1 p0 leg, got {players}"
+        assert len(set(r.leg.match_id for r in lineups[0])) == 6
+
+    def test_floor_gate_stops_weak_entries(self):
+        """Entries whose weakest leg is below min_floor_prob are not emitted."""
+        # probs: 0.62, 0.615, ... declining — with floor 0.60, only early entries pass
+        ranked = self._mk_ranked(24, base_prob=0.55, edge_step=0.005)
+        # Highest probs ~0.55+0.005*24=0.67 down to 0.555
+        # Floor 0.62 → only first lineup (players 0-5: probs 0.67..0.645) clears? 
+        # Player 0: 0.55+0.005*24=0.67, Player 5: 0.55+0.005*19=0.645, Player 6: 0.64
+        # With floor 0.65: Entry #1 floor is Player 5 at 0.645 → fails entirely
+        lineups = build_lineups(ranked, n_entries=4, n_legs=6, min_floor_prob=0.65)
+        assert lineups == []
+
+        # Floor 0.60: Entry #1 (0.67..0.645) ok; Entry #2 (0.64..0.615) ok;
+        # Entry #3 (0.61..0.585) fails at floor → stop
+        lineups = build_lineups(ranked, n_entries=4, n_legs=6, min_floor_prob=0.60)
+        assert len(lineups) >= 1
+        for lineup in lineups:
+            assert min(r.picked_true_prob for r in lineup) >= 0.60
 
 
 # ── build_multi_report (multi-entry markdown) ───────────────────────────────

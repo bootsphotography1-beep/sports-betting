@@ -264,7 +264,15 @@ def run_once(
 
     # ── Multi-entry mode: build 3-4 disjoint 6-flexes ──
     if n_entries > 1:
-        lineups = build_lineups(ranked, n_entries=n_entries, n_legs=effective_n_legs)
+        # Floor gate: don't emit entries whose weakest leg is below break-even + 1pp
+        floor = entry.break_even + 0.01
+        lineups = build_lineups(
+            ranked,
+            n_entries=n_entries,
+            n_legs=effective_n_legs,
+            min_floor_prob=floor,
+            diversify=True,
+        )
         if not lineups:
             print(f"\n[main] ranked pool has {len(ranked)} legs — not enough for 1 lineup of {effective_n_legs}")
             return 1
@@ -458,6 +466,8 @@ def main(argv: list[str] | None = None) -> int:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         store = SnapshotStore(db_path=db_path)
         store.init()
+        # Always define so clipboard/CSV-only ingest paths don't NameError
+        captured_at = utc_now()
 
         if args.snapshot:
             # Fetch live UD data (skip expensive pipeline)

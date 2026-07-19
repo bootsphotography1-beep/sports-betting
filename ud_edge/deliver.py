@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from ud_edge.models import RankedLeg, Leg
 from ud_edge.flex_math import UD_PAYOUTS, expected_value, recommend_entry
-from ud_edge.matcher import get_player_status
+from ud_edge.matcher import get_player_status, effective_true_prob
 
 
 # Per-entry recommendation thresholds: print the cheapest leg's true prob
@@ -65,13 +65,10 @@ def build_report(
     if entry is None:
         raise ValueError(f"unknown entry type: {entry_type}")
 
-    # Per-leg probability from the top N
+    # Per-leg probability from the top N (same-side sharp-aware)
     top_legs = ranked[:top_n]
-    # Use the SHARPER prob if available (otherwise UD's)
-    def effective_prob(r):
-        return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
     avg_prob = (
-        sum(effective_prob(r) for r in top_legs) / len(top_legs)
+        sum(effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in top_legs) / len(top_legs)
         if top_legs else 0.0
     )
     ev, win_prob, median_payout = expected_value(entry, avg_prob) if top_legs else (0, 0, 0)
@@ -137,7 +134,9 @@ def build_report(
                   f"OUT/IR/SUSP/DOUBTFUL players excluded. ⚠️ DTD/Q = still listed, "
                   "verify before submitting._  ")
     md.append("_Disclaimer: decision-support tool, not financial advice. "
-              "Track every pick; calibrate after 50+ settled legs._")
+              "Track every pick; calibrate after 50+ settled legs "
+              "(`python -m ud_edge --settle <index>:hit|miss:<stat>` then `--calibration`). "
+              "Advertised EV is unproven until hit rate ≈ predicted._")
 
     return "\n".join(md)
 
@@ -186,9 +185,9 @@ def build_multi_report(
         md.append("| Entry | Avg True% | EV/$1 | Win% | Med Payout | Rec | Mispricings |")
         md.append("|-------|-----------|-------|------|------------|-----|-------------|")
         for i, lineup in enumerate(lineups, 1):
-            def effective_prob(r):
-                return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
-            avg_prob = sum(effective_prob(r) for r in lineup) / len(lineup)
+            avg_prob = sum(
+                effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup
+            ) / len(lineup)
             ev, win_prob, med = expected_value(entry, avg_prob)
             rec = _recommend_from_ev(ev)
             n_mis = sum(1 for r in lineup if r.sharp_true_prob is not None)
@@ -201,14 +200,16 @@ def build_multi_report(
 
     # ── Per-entry sections ──
     for i, lineup in enumerate(lineups, 1):
-        def effective_prob(r):
-            return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
-        avg_prob = sum(effective_prob(r) for r in lineup) / len(lineup)
+        avg_prob = sum(
+            effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup
+        ) / len(lineup)
         ev, win_prob, median_payout = expected_value(entry, avg_prob)
         rec = _recommend_from_ev(ev)
 
         # Min true prob on this card (the floor — worst leg)
-        min_leg_prob = min(effective_prob(r) for r in lineup)
+        min_leg_prob = min(
+            effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup
+        )
         n_mis = sum(1 for r in lineup if r.sharp_true_prob is not None)
 
         md.append(f"## Entry #{i} — {entry.name}")
@@ -262,7 +263,9 @@ def build_multi_report(
                   "OUT/IR/SUSP/DOUBTFUL players excluded. ⚠️ DTD/Q = still listed, "
                   "verify before submitting._  ")
     md.append("_Disclaimer: decision-support tool, not financial advice. "
-              "Track every pick; calibrate after 50+ settled legs._")
+              "Track every pick; calibrate after 50+ settled legs "
+              "(`python -m ud_edge --settle <index>:hit|miss:<stat>` then `--calibration`). "
+              "Advertised EV is unproven until hit rate ≈ predicted._")
 
     return "\n".join(md)
 

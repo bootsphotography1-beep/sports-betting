@@ -12,6 +12,9 @@ dependencies = [
 dev = [
     "pytest>=7.4",
 ]
+env = [
+    "python-dotenv>=1.0",
+]
 
 [project.scripts]
 ud-edge = "ud_edge.__main__:main"

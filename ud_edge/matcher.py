@@ -137,6 +137,23 @@ def get_player_status(leg: Leg, injury_index: Optional[dict] = None) -> str:
     return sport_data.get(normalize_name(leg.player_name), "ACTIVE")
 
 
+def effective_true_prob(
+    picked_prob: float,
+    sharp_true_prob: Optional[float] = None,
+) -> float:
+    """Gate/EV probability that respects same-side sharp agreement.
+
+    - No sharp data → UD picked_prob
+    - Sharp same-side ≥ 0.5 (agrees) → max(UD, sharp) so confirmed mispricings clear the gate
+    - Sharp same-side < 0.5 (disagrees) → sharp prob (conservative; often filters the leg out)
+    """
+    if sharp_true_prob is None:
+        return picked_prob
+    if sharp_true_prob >= 0.5:
+        return max(picked_prob, sharp_true_prob)
+    return sharp_true_prob
+
+
 def rank_legs(
     legs: list[Leg],
     break_even: float = 0.5495,
@@ -160,13 +177,12 @@ def rank_legs(
                       are filtered out. Day-To-Day legs are kept (with a flag).
         sharp_book_index: optional {f"{norm_player}|{stat}": {over_decimal,
                           under_decimal, bookmaker, line_value}} from sharp books.
-                          When matched, the leg's "sharp true prob" replaces
-                          the UD-implied true prob for ranking — this surfaces
-                          mispricings where the sharp book disagrees with UD.
+                          When matched, sharp_true_prob is the sharp book's
+                          probability for UD's picked side (same-side). Agreements
+                          with higher sharp prob are boosted; disagreements
+                          (same-side < 50%) are demoted and often filtered out.
 
-    Returns: list of RankedLeg sorted by picked_edge_pp descending. The
-    sort key uses the SHARPER prob (if available) — this boosts legs where
-    the sharp book gives a higher true prob than UD implies.
+    Returns: list of RankedLeg sorted by mispricing-aware edge descending.
     """
     ranked: list[RankedLeg] = []
     skipped_threshold = 0
@@ -276,26 +292,26 @@ def rank_legs(
                     s_over, s_under, s_overround = no_vig(
                         sharp["over_decimal"], sharp["under_decimal"]
                     )
-                    sharp_true_prob = s_over if s_over >= s_under else s_under
+                    # Same-side probability: sharp's true prob for UD's picked side.
+                    # Never use the sharp favorite when it is the opposite side.
+                    sharp_true_prob = s_over if picked_side == "higher" else s_under
                     sharp_book = sharp.get("bookmaker", "sharp")
                     sharp_overround = s_overround
-                    # Mispricing = sharp_true_prob - ud_true_prob (positive = UD is too cheap on this side)
+                    # Mispricing = sharp_same_side - ud_picked (positive = UD underprices this side)
                     mispricing_edge_pp = (sharp_true_prob - picked_prob) * 100
                     matched_sharp += 1
                 except (ValueError, KeyError):
                     pass
 
         # ── Filter: only keep legs where the favorite side clears thresholds ──
-        # If sharp book disagrees and gives us more prob, use that for the gate.
-        effective_prob = max(picked_prob, sharp_true_prob) if sharp_true_prob else picked_prob
+        # Agree (sharp same-side ≥ 50%): may use the sharper of UD vs sharp for the gate.
+        # Disagree (sharp same-side < 50%): use sharp's lower estimate (conservative demote).
+        effective_prob = effective_true_prob(picked_prob, sharp_true_prob)
         effective_edge = edge_pp(effective_prob, break_even)
 
         if effective_prob < min_true_prob or effective_edge < min_edge_pp:
             skipped_threshold += 1
             continue
-
-        # Use the SHARPER prob for the sort key — surfaces mispricings
-        sort_prob = sharp_true_prob if sharp_true_prob else picked_prob
 
         ranked.append(
             RankedLeg(
@@ -317,12 +333,16 @@ def rank_legs(
             )
         )
 
-    # Sort by mispricing-aware key: legs where sharp book gives more confidence first
+    # Sort: boost same-side sharp agreements with higher confidence; demote disagreements
     def _sort_key(r: RankedLeg):
-        if r.mispricing_edge_pp is not None and r.mispricing_edge_pp > 0:
-            # Sharp book agrees or disagrees positively — boost these to the top
-            return (1, r.mispricing_edge_pp)
-        return (0, r.picked_edge_pp)
+        if r.mispricing_edge_pp is not None and r.sharp_true_prob is not None:
+            if r.sharp_true_prob >= 0.5 and r.mispricing_edge_pp > 0:
+                # Sharp agrees on side AND assigns higher probability → boost
+                return (2, r.mispricing_edge_pp)
+            if r.sharp_true_prob < 0.5:
+                # Sharp disagrees on side → demote below UD-only legs
+                return (0, r.mispricing_edge_pp)
+        return (1, r.picked_edge_pp)
 
     ranked.sort(key=_sort_key, reverse=True)
 
@@ -348,31 +368,89 @@ def top_n_for_entry(ranked: list[RankedLeg], n_legs: int) -> list[RankedLeg]:
     return ranked[:n_legs]
 
 
+def _lineup_floor_prob(lineup: list[RankedLeg]) -> float:
+    """Minimum effective true-prob across legs in a lineup."""
+    return min(
+        effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup
+    )
+
+
+def _select_diversified_lineup(
+    pool: list[RankedLeg],
+    n_legs: int,
+    max_per_game: int = 1,
+) -> list[RankedLeg]:
+    """Greedily pick `n_legs` from `pool` (already best-first), diversifying.
+
+    Soft constraints (relaxed only if a full lineup cannot otherwise be filled):
+      1. At most one leg per player_id
+      2. At most `max_per_game` legs per match_id (None match_ids unrestricted)
+    """
+    if len(pool) < n_legs:
+        return []
+
+    def _try(max_game: int, unique_players: bool) -> list[RankedLeg]:
+        chosen: list[RankedLeg] = []
+        used_players: set[str] = set()
+        game_counts: dict[int, int] = {}
+        for r in pool:
+            pid = r.leg.player_id
+            mid = r.leg.match_id
+            if unique_players and pid in used_players:
+                continue
+            if mid is not None and game_counts.get(mid, 0) >= max_game:
+                continue
+            chosen.append(r)
+            used_players.add(pid)
+            if mid is not None:
+                game_counts[mid] = game_counts.get(mid, 0) + 1
+            if len(chosen) == n_legs:
+                return chosen
+        return chosen if len(chosen) == n_legs else []
+
+    # Tightest → loosest diversification
+    for max_game, unique_players in (
+        (max_per_game, True),
+        (2, True),
+        (n_legs, True),
+        (n_legs, False),
+    ):
+        picked = _try(max_game, unique_players)
+        if picked:
+            return picked
+    return []
+
+
 def build_lineups(
     ranked: list[RankedLeg],
     n_entries: int = 4,
     n_legs: int = 6,
+    min_floor_prob: Optional[float] = None,
+    diversify: bool = True,
 ) -> list[list[RankedLeg]]:
     """Partition ranked legs into N disjoint lineups of `n_legs` legs each.
 
     Fin's goal: deliver 3-4 distinct 6-man 6-flex entries per day so he
     can place multiple cards from the same edge pool without doubling up.
 
-    Algorithm: simple top-N*K chunking. Entry #1 = top [0:n_legs], Entry #2
-    = next [n_legs:2*n_legs], etc. Order is preserved from the ranked list
-    (already sorted by edge desc, sharp-book-boosted mispricings first).
+    Algorithm: greedy best-first selection with optional same-player /
+    same-game diversification. Entry #1 takes the best diversified set;
+    subsequent entries draw from the remaining pool.
+
+    Quality gate: if `min_floor_prob` is set, an entry whose weakest leg
+    (effective true-prob) falls below that floor is discarded and no further
+    (weaker) entries are emitted.
 
     Auto-fallback when the slate is thin: returns however many full
-    lineups fit (1, 2, 3, or 4). If 0 lineups fit (ranked has fewer than
-    `n_legs` legs), returns an empty list — caller should surface "no
-    +EV slate today".
-
-    Disjointness: guaranteed by construction (chunks don't overlap).
+    lineups fit. If 0 lineups fit, returns an empty list.
 
     Args:
         ranked: pre-sorted list of RankedLeg (best edge first)
         n_entries: maximum number of entries to build (e.g. 4)
         n_legs: legs per entry (e.g. 6 for a 6-flex)
+        min_floor_prob: optional minimum effective true-prob for every leg
+            in an emitted entry (e.g. break_even + 0.01)
+        diversify: when True, prefer unique players and ≤1 leg per game
 
     Returns: list of length <= n_entries, each a list of n_legs RankedLeg.
     """
@@ -381,18 +459,27 @@ def build_lineups(
     if n_legs < 1:
         raise ValueError(f"n_legs must be >= 1, got {n_legs}")
 
-    needed = n_entries * n_legs
     if len(ranked) < n_legs:
-        # Not even one full lineup possible
         return []
 
-    # Cap n_entries to however many full lineups fit
-    max_full = len(ranked) // n_legs
-    actual = min(n_entries, max_full)
+    pool = list(ranked)
+    lineups: list[list[RankedLeg]] = []
 
-    lineups = []
-    for i in range(actual):
-        start = i * n_legs
-        end = start + n_legs
-        lineups.append(ranked[start:end])
+    for _ in range(n_entries):
+        if diversify:
+            lineup = _select_diversified_lineup(pool, n_legs=n_legs)
+        else:
+            lineup = pool[:n_legs] if len(pool) >= n_legs else []
+
+        if not lineup:
+            break
+
+        if min_floor_prob is not None and _lineup_floor_prob(lineup) < min_floor_prob:
+            # Weaker remaining legs will only be worse — stop emitting entries
+            break
+
+        lineups.append(lineup)
+        used_ids = {r.leg.line_id for r in lineup}
+        pool = [r for r in pool if r.leg.line_id not in used_ids]
+
     return lineups

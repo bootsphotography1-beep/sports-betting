@@ -98,15 +98,40 @@ recalibrate the threshold:
 So 2σ ≈ 14pp. The realized hit rate has to be **>14pp below predicted**
 to flag a recalibration.
 
+## Injury filter (live)
+
+The live pipeline fetches ESPN's public injury feeds (NBA/NFL/MLB/NHL/WNBA/
+CFB/FIFA) and **excludes** legs where the player is `OUT`, `INJURY_RESERVE`,
+`SUSPENDED`, or `DOUBTFUL`. Players listed `DAY_TO_DAY` / `QUESTIONABLE` /
+`PROBABLE` remain in the report with a ⚠️ flag — still verify before
+submitting. Rest, back-to-backs, and weather are **not** modeled.
+
+## Sharp-book same-side rule
+
+When a sharp line is matched, the bot uses the sharp book's **true
+probability for the same side UD picked** — never the sharp favorite if that
+favorite is the opposite side. Legs where the sharp book disagrees
+(same-side true prob < 50%) are demoted and usually filtered out. Positive
+mispricing (sharp same-side > UD) boosts rank.
+
+## Calibration prerequisite
+
+Advertised EV assumes predicted true probs are calibrated. Settle picks with
+`--settle` and check `--calibration`. **Do not trust EV estimates until
+≥50 settled legs** show hit rate ≈ predicted within ~2σ.
+
 ## Limitations
 
-- **No game-context filter.** The bot doesn't know about injuries, rest,
-  back-to-backs, or weather. A 60% probability at "starting QB confirmed"
-  is worth more than 60% at "starting QB uncertain." **Always do a 5-min
-  injury scan before submitting the slip.**
-- **Single-book source.** UD's prices are a reasonable proxy, but they
-  include retail vig (~5%). A sharp-book cross-reference would tighten
-  true-prob estimates by ~1-2pp.
+- **Partial game-context.** Injuries OUT/IR/Suspended/Doubtful are filtered;
+  rest, back-to-backs, and weather are not. Always sanity-check the slip.
+- **Single-book source by default.** UD's prices are a reasonable proxy, but
+  they include retail vig (~5%). Manual CSV / SportsGameOdds cross-ref
+  tightens estimates only when same-side sharp data is present and fresh.
+- **Independence assumed in EV.** Flex EV uses a binomial model; same-game
+  correlation can erase modeled edge. Lineup builder prefers ≤1 leg per
+  game/player when alternatives exist.
+- **Multi-entry dilution.** Later entries use weaker legs; a floor gate
+  (break-even + 1pp) stops emitting cards that fail the quality bar.
 - **No closing-line value tracking.** A +EV leg at 10am that moves against
   you by tip-off may not still be +EV.
 - **No line-movement timing.** If UD moves the line at 11am, our 10am

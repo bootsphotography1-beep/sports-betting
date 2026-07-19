@@ -1,10 +1,11 @@
 """Sharp-book cross-reference client.
 
 Goal: detect mispricings between Underdog Fantasy and sharp/reputable
-sportsbooks. If UD is offering a worse line on the same player+stat+total
-than Pinnacle/DK/FanDuel, that's a +EV signal — we should pick the better
-side on UD regardless of how UD prices it, because the sharp book is our
-ground truth.
+sportsbooks. When a sharp line matches a UD leg, we compare the sharp book's
+true probability for the SAME side UD already picked. If sharp assigns a
+higher same-side probability, that is a +EV mispricing signal. If sharp
+favors the opposite side, the leg is demoted/filtered — we do not flip sides
+solely from sharp data.
 
 Two source strategies:
   1. AUTO:   SportsGameOdds API (free tier: 2,500 objects/month, 9 books
