@@ -49,6 +49,11 @@ SPORT_STAT_WHITELIST: dict[str, set[str]] = {
             "fantasy_points", "power_play_points"},
     "PGA": {"birdies", "bogeys", "eagles", "pars", "strokes"},
     "MMA": {"significant_strikes", "takedowns", "fantasy_points"},
+    # Tennis: exclude sets_played / sets_won — those are structural
+    # match-length props that dominate the favorite-side ranking and
+    # produce highly correlated 6-flexes. Keep game-total markets.
+    "TENNIS": {"games_won", "games_played", "breakpoints_won",
+               "aces", "double_faults"},
     "FIFA": {"period_1_2_goals", "period_1_2_assists", "period_1_2_shots_on_target",
              "period_1_2_shots_attempted", "period_1_2_goals_assists",
              "period_1_2_saves", "period_1_goals"},
@@ -84,8 +89,9 @@ def is_trivial_under_zero(leg: Leg) -> bool:
         return True
 
     RARE_UNDER_HALF_STATS = {
-        # MLB
-        "rbis", "walks", "home_runs", "stolen_bases",
+        # MLB — rare counting stats where Under 0.5 is a near-default outcome
+        "rbis", "runs", "walks", "home_runs", "stolen_bases",
+        "hits",  # bench/pitcher hit props are similarly illiquid
         "hits_allowed", "runs_allowed", "walks_allowed",
         "period_1_total_runs_allowed",
         # NFL
@@ -97,7 +103,7 @@ def is_trivial_under_zero(leg: Leg) -> bool:
         "period_1_2_goals", "period_1_2_assists",
         "period_1_2_first_goal_scorer", "period_1_2_last_goalscorer",
         # Tennis
-        "tie_breakers_played", "sets_won",
+        "tie_breakers_played", "sets_won", "sets_played",
         # MMA
         "takedowns",
     }

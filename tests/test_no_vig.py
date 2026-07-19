@@ -545,12 +545,12 @@ class TestFullGameOnly:
     def _mk_legs(self):
         from ud_edge.models import Leg
         return [
-            # Tennis full-game (KEEP)
+            # Tennis full-game games market (KEEP — in TENNIS whitelist)
             Leg(line_id="l1", player_id="p1", player_name="A", sport_id="TENNIS",
-                stat_name="sets_played", line_value=2.5, line_type="balanced",
+                stat_name="games_won", line_value=10.5, line_type="balanced",
                 higher_american=-150, higher_decimal=1.67, higher_multiplier=0.82,
                 lower_american=130, lower_decimal=2.30, lower_multiplier=1.10),
-            # Tennis mid-match (DROP)
+            # Tennis mid-match (DROP via full_game_only)
             Leg(line_id="l2", player_id="p2", player_name="B", sport_id="TENNIS",
                 stat_name="period_1_games_won", line_value=5.5, line_type="balanced",
                 higher_american=-140, higher_decimal=1.71, higher_multiplier=0.83,
@@ -580,27 +580,31 @@ class TestFullGameOnly:
     def test_full_game_only_drops_midgame(self):
         legs = self._mk_legs()
         ranked_full = rank_legs(legs, break_even=0.5421, full_game_only=True)
-        ranked_default = rank_legs(legs, break_even=0.5421)
-        # Default: all 6 may rank (assuming they pass threshold)
-        # full_game_only: only 3 should pass (TENNIS sets_played, MLB hits, NBA points)
         ids_full = {r.leg.line_id for r in ranked_full}
         assert "l2" not in ids_full  # period_1_games_won dropped
         assert "l4" not in ids_full  # period_1_strikeouts dropped
         assert "l6" not in ids_full  # CS sport dropped
-        # And the keepers should remain
+        # Keepers: tennis games_won, MLB hits, NBA points
         assert "l1" in ids_full
         assert "l3" in ids_full
         assert "l5" in ids_full
 
     def test_full_game_only_off_keeps_all(self):
-        """Without the flag, mid-game and obscure-sport legs are kept."""
+        """Without the flag, mid-game and obscure-sport legs are kept.
+
+        Note: TENNIS period_1_games_won is still dropped by the sport whitelist
+        (not in TENNIS allowed stats). CS remains because ESPORTS whitelist
+        includes kills_on_maps_1_2.
+        """
         legs = self._mk_legs()
         ranked = rank_legs(legs, break_even=0.5421, full_game_only=False)
         ids = {r.leg.line_id for r in ranked}
-        # All 6 should pass (assuming thresholds met for each)
-        assert "l2" in ids
-        assert "l4" in ids
-        assert "l6" in ids
+        assert "l1" in ids
+        assert "l3" in ids
+        assert "l4" in ids  # mid-game MLB kept when flag is off
+        assert "l5" in ids
+        assert "l6" in ids  # CS kept when flag is off
+        assert "l2" not in ids  # period_1 tennis not in whitelist
 
 
 # ── results_tracker (calibration) ───────────────────────────────────────────
