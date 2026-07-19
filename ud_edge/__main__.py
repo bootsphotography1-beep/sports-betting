@@ -235,15 +235,20 @@ def run_once(
         import os
         sgo_key = os.environ.get("SPORTSGAMEODDS_KEY", "")
         odds_key = os.environ.get("ODDS_API_KEY", "")
+        propline_key = os.environ.get("PROPLINE_API_KEY", "")
         sharp_csv = cache_path.parent / "sharp_lines.csv"
-        # If SGO / Odds API key present, fetch for major sports with active UD lines
-        auto_sports = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"] if (sgo_key or odds_key) else None
+        # Prefer PropLine when keyed; also support Odds API / SGO
+        auto_sports = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"] if (
+            sgo_key or odds_key or propline_key
+        ) else None
         sharp_index = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key or None,
             sgo_sports=auto_sports if sgo_key else None,
             odds_api_key=odds_key or None,
             odds_api_sports=auto_sports if odds_key else None,
+            propline_key=propline_key or None,
+            propline_sports=auto_sports if propline_key else None,
             cache_path=cache_path.parent / "sharp_cache",
         )
         sources = set(v.get("source", "?") for v in sharp_index.values())
@@ -417,7 +422,8 @@ def main(argv: list[str] | None = None) -> int:
             print('  pip install -e ".[dashboard]"')
             return 1
         print(f"[dashboard] Edge Board → http://{args.host}:{args.port}")
-        print("[dashboard] Sharp sources: data/sharp_lines.csv + ODDS_API_KEY / SPORTSGAMEODDS_KEY")
+        print("[dashboard] Sharp sources: PROPLINE_API_KEY (preferred) · "
+              "data/sharp_lines.csv · ODDS_API_KEY · SPORTSGAMEODDS_KEY")
         uvicorn.run(
             "ud_edge.dashboard.app:app",
             host=args.host,

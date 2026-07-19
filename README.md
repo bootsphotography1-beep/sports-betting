@@ -76,19 +76,20 @@ Open **http://127.0.0.1:8787** in your browser. The board:
 - One-click **Copy** buttons for PrizePicks / Sleeper / Underdog formats
   (per pick, per sport, or entire slate)
 
-Optional env keys for live sharp pulls:
+Optional env keys for live sharp / fantasy pulls:
 
 | Env var | Source |
 |---|---|
-| `ODDS_API_KEY` | [The Odds API](https://the-odds-api.com) player props (DK/FD/BetMGM, …) |
+| `PROPLINE_API_KEY` | **Preferred** — [PropLine](https://prop-line.com) (Pinnacle + DK/FD + PrizePicks/Underdog/Sleeper) |
+| `ODDS_API_KEY` | [The Odds API](https://the-odds-api.com) player props |
 | `SPORTSGAMEODDS_KEY` | [SportsGameOdds](https://sportsgameodds.com) free tier |
 
-Without keys, `data/sharp_lines.csv` is still used as the sharp ground truth
-(~5 min/day to paste 10–30 lines from your sportsbook of choice).
+```bash
+export PROPLINE_API_KEY=your_key_here
+python -m ud_edge --serve
+```
 
-PrizePicks / Sleeper live APIs remain blocked (DataDome / no public Picks API).
-Drop exported boards into `data/prizepicks_board.csv` or `data/sleeper_board.csv`
-(same CSV columns as the demo files) and the dashboard will merge them.
+Without keys, `data/sharp_lines.csv` is still used as the sharp ground truth.
 
 ## Daily cron
 
@@ -239,23 +240,21 @@ above for a working two-source demo.
 
 ## Mispricing workflow (sharp-book cross-reference)
 
-The bot supports three sharp-book data sources:
+The bot supports these sharp / fantasy data sources:
 
-1. **Manual CSV** (`data/sharp_lines.csv`) — works today, no signup needed.
-   Copy a handful of player-prop lines from DraftKings / FanDuel / BetMGM /
-   Pinnacle into this file. Bot uses them as ground truth to detect mispricings.
+1. **PropLine** (`PROPLINE_API_KEY`) — **preferred**. Pinnacle + DK/FD/BetMGM
+   plus PrizePicks / Underdog / Sleeper boards in one feed. Hobby ($9) / Pro ($19).
 
-2. **The Odds API** — export `ODDS_API_KEY=...`. Pulls US-book player props
-   (DraftKings, FanDuel, BetMGM, …) for NBA/NFL/MLB/NHL/WNBA/CFB and more.
+2. **Manual CSV** (`data/sharp_lines.csv`) — works with no signup.
+   Copy lines from any sportsbook into this file as a fallback.
 
-3. **SportsGameOdds free tier** — sign up at [sportsgameodds.com](https://sportsgameodds.com)
-   (free, no CC), then export `SPORTSGAMEODDS_KEY=...`. Pinnacle is **not**
-   included in the free tier; validate the adapter against your live key.
+3. **The Odds API** (`ODDS_API_KEY`) — US-book player props (paid plans start $30).
 
-Comparison is **side-aligned**: sharp over is compared to fantasy Higher/More,
-sharp under to Lower/Less. If the sharp book disagrees with the fantasy favorite
-by ≥2pp, the pick flips to the sharp-favored side. Soft fantasy prices (sharp
-same-side true prob higher than fantasy) rise to the top of Edge Board.
+4. **SportsGameOdds** (`SPORTSGAMEODDS_KEY`) — free Amateur tier available;
+   paid plans are much higher.
+
+Comparison is **side-aligned**: sharp over ↔ fantasy Higher/More,
+sharp under ↔ Lower/Less. Soft fantasy prices rise to the top of Edge Board.
 
 ## Entry-type cheat sheet
 

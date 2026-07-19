@@ -493,13 +493,16 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
                       sgo_sports: Optional[list[str]] = None,
                       odds_api_key: Optional[str] = None,
                       odds_api_sports: Optional[list[str]] = None,
+                      propline_key: Optional[str] = None,
+                      propline_sports: Optional[list[str]] = None,
                       cache_path: Optional[Path] = None) -> dict[str, dict]:
     """Build a sharp-book lookup index.
 
     Returns: {f"{normalize(player)}|{stat}": {over_decimal, under_decimal,
               bookmaker, line_value, source, ...}}
 
-    Priority (later wins): manual CSV < Odds API < SportsGameOdds
+    Priority (later wins): manual CSV < Odds API < SportsGameOdds < PropLine
+    PropLine is preferred when present (Pinnacle + DK/FD in one feed).
     """
     index: dict[str, dict] = {}
 
@@ -512,8 +515,8 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
 
     # 2. The Odds API
     odds_key = odds_api_key or os.environ.get("ODDS_API_KEY", "")
-    if odds_key and (odds_api_sports or sgo_sports):
-        sports = odds_api_sports or sgo_sports or []
+    if odds_key and (odds_api_sports or sgo_sports or propline_sports):
+        sports = odds_api_sports or sgo_sports or propline_sports or []
         try:
             client = OddsApiClient(odds_key, cache_path=cache_path)
             for sport in sports:
@@ -558,6 +561,27 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
                     }
         except Exception as e:
             print(f"[sharp_books] SGO fetch failed: {e}")
+
+    # 4. PropLine (preferred — Pinnacle + US books + DFS in one feed)
+    pl_key = propline_key or os.environ.get("PROPLINE_API_KEY", "")
+    if pl_key and (propline_sports or sgo_sports or odds_api_sports):
+        sports = propline_sports or sgo_sports or odds_api_sports or []
+        try:
+            from ud_edge.propline_client import build_propline_indexes
+            pl_index, _fantasy, pl_meta = build_propline_indexes(
+                api_key=pl_key,
+                sports=sports,
+                cache_path=cache_path,
+            )
+            for k, v in pl_index.items():
+                index[k] = v
+            print(f"[sharp_books] PropLine indexed {pl_meta.get('count_sharp', 0)} sharp props "
+                  f"({pl_meta.get('count_fantasy', 0)} fantasy props available)")
+            if pl_meta.get("errors"):
+                for err in pl_meta["errors"]:
+                    print(f"[sharp_books] PropLine note: {err}")
+        except Exception as e:
+            print(f"[sharp_books] PropLine fetch failed: {e}")
 
     return index
 

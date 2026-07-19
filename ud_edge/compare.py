@@ -104,8 +104,9 @@ def collect_sharp_index(
     *,
     data_dir: Optional[Path] = None,
     sports: Optional[list[str]] = None,
+    skip_propline: bool = False,
 ) -> tuple[dict, dict]:
-    """Build sharp-book index from CSV + optional Odds API / SGO keys."""
+    """Build sharp-book index from CSV + PropLine / Odds API / SGO keys."""
     root = _project_root()
     data_dir = data_dir or (root / "data")
     sports = sports or DEFAULT_SPORTS
@@ -114,6 +115,7 @@ def collect_sharp_index(
     sharp_csv = data_dir / "sharp_lines.csv"
     sgo_key = os.environ.get("SPORTSGAMEODDS_KEY", "") or None
     odds_key = os.environ.get("ODDS_API_KEY", "") or None
+    propline_key = None if skip_propline else (os.environ.get("PROPLINE_API_KEY", "") or None)
 
     try:
         index = build_sharp_index(
@@ -122,6 +124,8 @@ def collect_sharp_index(
             sgo_sports=sports if sgo_key else None,
             odds_api_key=odds_key,
             odds_api_sports=sports if odds_key else None,
+            propline_key=propline_key,
+            propline_sports=sports if propline_key else None,
             cache_path=data_dir / "sharp_cache",
         )
         meta["count"] = len(index)
@@ -172,16 +176,53 @@ def compare_fantasy_vs_sharp(
             if p.exists() and "demo" not in name:
                 fantasy_csvs.append((p, source))
 
+    sports_list = sorted(sport_filter) if sport_filter else DEFAULT_SPORTS
+
     legs, fantasy_meta = collect_fantasy_legs(
         cache_path=data_dir / "ud_lines_cache.json",
         sport_filter=sport_filter,
         fantasy_csvs=fantasy_csvs,
         force_fetch=force_fetch,
     )
+
+    # Single PropLine pull → sharp index + fantasy boards (PP/UD/Sleeper)
+    pl_key = os.environ.get("PROPLINE_API_KEY", "")
+    pl_sharp: dict = {}
+    if pl_key:
+        try:
+            from ud_edge.propline_client import build_propline_indexes, fantasy_props_to_legs
+            pl_sharp, fantasy_props, pl_meta = build_propline_indexes(
+                api_key=pl_key,
+                sports=sports_list,
+                cache_path=data_dir / "sharp_cache",
+            )
+            pl_legs = fantasy_props_to_legs(fantasy_props)
+            if sport_filter:
+                pl_legs = [l for l in pl_legs if (l.sport_id or "") in sport_filter]
+            legs.extend(pl_legs)
+            fantasy_meta.setdefault("sources", {})
+            fantasy_meta["sources"]["propline_fantasy"] = len(pl_legs)
+            for src in sorted({p.get("bookmaker", "?") for p in fantasy_props}):
+                fantasy_meta["sources"][f"propline-{src}"] = sum(
+                    1 for p in fantasy_props if p.get("bookmaker") == src
+                )
+            fantasy_meta.setdefault("errors", []).extend(pl_meta.get("errors", []))
+        except Exception as e:
+            fantasy_meta.setdefault("errors", []).append(f"propline: {e}")
+
     sharp_index, sharp_meta = collect_sharp_index(
         data_dir=data_dir,
-        sports=sorted(sport_filter) if sport_filter else DEFAULT_SPORTS,
+        sports=sports_list,
+        skip_propline=True,  # already pulled above
     )
+    # PropLine sharp wins over CSV / other sources
+    if pl_sharp:
+        sharp_index.update(pl_sharp)
+        sharp_meta["count"] = len(sharp_index)
+        sharp_meta["sources"] = sorted({
+            *sharp_meta.get("sources", []),
+            *(v.get("source", "propline") for v in pl_sharp.values()),
+        })
 
     ranked = rank_legs(
         legs,
