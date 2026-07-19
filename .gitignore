@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+data/*.json
+data/*.csv
+data/line_snapshots.sqlite3
+data/line_snapshots.pre_demo.sqlite3
+data/prizepicks_demo.csv
+data/draftkings_demo.csv
+data/injury_cache/
+data/apisports_cache/
+reports/
+.env
+
+# Allow demo CSVs in data/
+!data/*.csv
