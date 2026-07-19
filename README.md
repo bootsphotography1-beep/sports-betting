@@ -215,6 +215,24 @@ python -m ud_edge --snapshot --ingest-propline --save reports/stale_propline.md
 That pulls PrizePicks + Sleeper + Dabble + Pinnacle props into the snapshot DB
 alongside live Underdog.
 
+### Adaptive poller + push alerts (5,000 PropLine calls/day)
+
+```bash
+# Subscribe on your phone first: install "ntfy" → topic ud-edge-fin-alerts
+# https://ntfy.sh/ud-edge-fin-alerts
+
+python -m ud_edge --poll --alert-pp 1.5
+```
+
+**Budget math:** 5,000 calls/day with 10% reserve. Each poll = 1 lean MLB
+`/odds` call. Interval densifies near tip-off (45s in the last ~90 min,
+3–15 min otherwise) and never outruns `seconds_left / calls_left`.
+
+**When a misprice fires:** you get a push (ntfy / Slack / Discord) that says
+**PLACE ON → Underdog Fantasy**. Sharp books are signal only.
+
+Optional: `SLACK_WEBHOOK_URL` or `DISCORD_WEBHOOK_URL` in `.env`.
+
 ## Mispricing workflow (sharp-book cross-reference)
 
 Priority when building the sharp index (later overrides earlier):
@@ -256,6 +274,10 @@ ud_edge/
 ├── injury_client.py         # ESPN public injury feed (NBA/NFL/MLB/NHL/WNBA/CFB/EPL/MLS/WC)
 ├── sharp_books_client.py    # Sharp-book cross-ref (CSV + SGO + PropLine)
 ├── propline_client.py       # PropLine adapter (PROPLINE_API_KEY) — multi-book props
+├── budget.py                # 5k/day PropLine call budget + adaptive interval math
+├── notify.py                # ntfy / Slack / Discord push on misprice
+├── poller.py                # --poll loop: scan → alert → sleep
+├── dashboard.py             # --dashboard HTML board (place-on Underdog)
 ├── matcher.py               # rank_legs() + build_lineups() (multi-entry partitioner)
 ├── results_tracker.py        # log_picks + settle_pick + calibration_stats (per-pick tracking)
 ├── stale_pricing.py         # Phase 1: SnapshotStore, movement detector, stale opportunity detector

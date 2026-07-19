@@ -419,6 +419,15 @@ def main(argv: list[str] | None = None) -> int:
                              "(reports/dashboard.html) showing which app to place on.")
     parser.add_argument("--dashboard-out", type=str, default="reports/dashboard.html",
                         help="Output path for --dashboard (default: reports/dashboard.html)")
+    parser.add_argument("--poll", action="store_true",
+                        help="Run adaptive PropLine poller (≤5000 calls/day) and push "
+                             "alerts when mispriced opportunities appear.")
+    parser.add_argument("--poll-once", action="store_true",
+                        help="Single poll cycle + alert check, then exit.")
+    parser.add_argument("--poll-limit", type=int, default=5000,
+                        help="PropLine daily call budget (default 5000).")
+    parser.add_argument("--alert-pp", type=float, default=1.5,
+                        help="Minimum same-side mispricing (pp) to push an alert (default 1.5).")
 
     args = parser.parse_args(argv)
 
@@ -429,6 +438,15 @@ def main(argv: list[str] | None = None) -> int:
         print("[dashboard] PLACE EVERY MISPRICED PICK ON → Underdog Fantasy")
         print("[dashboard] Sharp books (Pinnacle/DK/FD) are the signal only.")
         return 0
+
+    if args.poll or args.poll_once:
+        from ud_edge.poller import run_poll_loop
+        return run_poll_loop(
+            daily_limit=args.poll_limit,
+            min_mispricing_pp=args.alert_pp,
+            min_alert_pp=args.alert_pp,
+            once=args.poll_once,
+        )
 
     # ── Calibration report (early-exit) ────────────────────────────────────
     if args.calibration:

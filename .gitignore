@@ -13,6 +13,9 @@ data/draftkings_demo.csv
 data/injury_cache/
 data/apisports_cache/
 data/sharp_cache/
+data/propline_budget.json
+data/alert_state.json
+data/alerts.jsonl
 reports/
 .env
 
