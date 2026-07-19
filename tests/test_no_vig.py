@@ -218,6 +218,7 @@ class TestInjuryClient:
         assert normalize_name("Jayson Tatum") == "jayson tatum"
         assert normalize_name("D'Angelo Russell") == "dangelo russell"
         assert normalize_name("  P.J.  Washington  ") == "pj washington"
+        assert normalize_name("Andrés Giménez") == "andres gimenez"
 
     def test_normalize_status_out(self):
         from ud_edge.injury_client import normalize_status
@@ -316,8 +317,80 @@ class TestSharpBooksClient:
         assert abs(_to_decimal("-110") - 1.909) < 0.01
         assert abs(_to_decimal("-150") - 1.667) < 0.01
         assert abs(_to_decimal(1.85) - 1.85) < 0.01
+        # PropLine returns raw American ints
+        assert abs(_to_decimal(-165) - (1 + 100 / 165)) < 0.01
+        assert abs(_to_decimal(125) - 2.25) < 0.01
+        assert abs(_to_decimal(100) - 2.0) < 0.01
         assert _to_decimal(None) is None
         assert _to_decimal("") is None
+
+    def test_propline_client_builds_two_sided_index(self, monkeypatch, tmp_path):
+        """PropLine mock payload → sharp index with UD stat names."""
+        from ud_edge import sharp_books_client as sbc
+
+        fake_payload = [
+            {
+                "id": "1",
+                "home_team": "A",
+                "away_team": "B",
+                "bookmakers": [
+                    {
+                        "key": "pinnacle",
+                        "markets": [
+                            {
+                                "key": "batter_hits",
+                                "outcomes": [
+                                    {"name": "Over", "description": "Alec Burleson",
+                                     "price": -165, "point": 1.5},
+                                    {"name": "Under", "description": "Alec Burleson",
+                                     "price": 135, "point": 1.5},
+                                ],
+                            }
+                        ],
+                    },
+                    {
+                        "key": "prizepicks",
+                        "markets": [
+                            {
+                                "key": "batter_hits",
+                                "outcomes": [
+                                    {"name": "Over", "description": "Alec Burleson",
+                                     "price": 100, "point": 1.5, "dfs_odds_type": "standard"},
+                                    {"name": "Under", "description": "Alec Burleson",
+                                     "price": 100, "point": 1.5, "dfs_odds_type": "standard"},
+                                ],
+                            }
+                        ],
+                    },
+                ],
+            }
+        ]
+
+        class FakeResp:
+            def raise_for_status(self):
+                return None
+            def json(self):
+                return fake_payload
+
+        monkeypatch.setattr(
+            sbc.requests.Session, "get", lambda self, *a, **k: FakeResp()
+        )
+        client = sbc.PropLineClient("test-key", cache_path=tmp_path)
+        props = client.fetch_player_props("MLB")
+        assert len(props) == 1
+        assert props[0]["stat"] == "hits"
+        assert props[0]["bookmaker"] == "pinnacle"
+        assert props[0]["line"] == 1.5
+        assert props[0]["over_decimal"] < props[0]["under_decimal"]
+
+        idx = sbc.build_sharp_index(
+            propline_key="test-key",
+            propline_sports=["MLB"],
+            cache_path=tmp_path,
+        )
+        assert "alec burleson|hits" in idx
+        assert idx["alec burleson|hits"]["bookmaker"] == "pinnacle"
+        assert idx["alec burleson|hits"]["source"] == "propline-MLB"
 
     def test_build_sharp_index_with_only_csv(self, tmp_path):
         from ud_edge.sharp_books_client import build_sharp_index

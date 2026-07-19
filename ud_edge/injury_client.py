@@ -54,9 +54,13 @@ WILL_NOT_PLAY_STATUSES = {
 
 
 def normalize_name(name: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace — match across sources."""
+    """Lowercase, strip accents/punctuation, collapse whitespace — match across sources."""
+    import unicodedata
+    # Fold accents: Andrés → Andres (so PropLine/UD/ESPN names align)
+    folded = unicodedata.normalize("NFKD", name or "")
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
     return " ".join(
-        re.sub(r"[^a-z0-9 ]", "", name.lower()).split()
+        re.sub(r"[^a-z0-9 ]", "", folded.lower()).split()
     )
 
 

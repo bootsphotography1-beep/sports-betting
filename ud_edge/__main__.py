@@ -234,17 +234,26 @@ def run_once(
         from ud_edge.sharp_books_client import build_sharp_index
         import os
         sgo_key = os.environ.get("SPORTSGAMEODDS_KEY", "")
+        propline_key = os.environ.get("PROPLINE_API_KEY", "")
         sharp_csv = cache_path.parent / "sharp_lines.csv"
         # If SGO key present, fetch for all sports with active UD lines
         sgo_sports = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"] if sgo_key else None
+        # PropLine free tier: one bulk call per sport — prioritize today's slate
+        propline_sports = (
+            ["MLB", "WNBA", "NFL", "NBA", "NHL", "TENNIS"] if propline_key else None
+        )
         sharp_index = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key or None,
             sgo_sports=sgo_sports,
+            propline_key=propline_key or None,
+            propline_sports=propline_sports,
             cache_path=cache_path.parent / "sharp_cache",
         )
         sources = set(v.get("source", "?") for v in sharp_index.values())
-        print(f"[sharp] {len(sharp_index)} lines indexed from: {sorted(sources)}")
+        books = set(v.get("bookmaker", "?") for v in sharp_index.values())
+        print(f"[sharp] {len(sharp_index)} lines indexed from: {sorted(sources)} "
+              f"| books={sorted(books)}")
     except Exception as e:
         print(f"[sharp] cross-ref skipped (error: {e})")
 

@@ -263,19 +263,24 @@ def rank_legs(
 
         if sharp_book_index:
             from ud_edge.injury_client import normalize_name
-            # Try direct match first
+            norm = normalize_name(leg.player_name)
+            # Prefer exact player|stat|line match (PropLine stores both forms)
             sharp = sharp_book_index.get(
-                f"{normalize_name(leg.player_name)}|{leg.stat_name}"
+                f"{norm}|{leg.stat_name}|{leg.line_value:g}"
             )
-            # If direct match fails, try fuzzy match (same player, similar line)
+            if sharp is None:
+                sharp = sharp_book_index.get(f"{norm}|{leg.stat_name}")
+            # Fuzzy: same player + stat, line within tolerance
             if sharp is None:
                 for k, v in sharp_book_index.items():
-                    if not k.endswith(f"|{leg.stat_name}"):
+                    parts = k.split("|")
+                    if len(parts) < 2:
                         continue
-                    if normalize_name(k.split("|")[0]) == normalize_name(leg.player_name):
-                        if abs(v.get("line_value", 0) - leg.line_value) <= LINE_TOLERANCE:
-                            sharp = v
-                            break
+                    if parts[0] != norm or parts[1] != leg.stat_name:
+                        continue
+                    if abs(v.get("line_value", 0) - leg.line_value) <= LINE_TOLERANCE:
+                        sharp = v
+                        break
 
             if sharp is not None:
                 try:

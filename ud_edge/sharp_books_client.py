@@ -6,14 +6,12 @@ than Pinnacle/DK/FanDuel, that's a +EV signal — we should pick the better
 side on UD regardless of how UD prices it, because the sharp book is our
 ground truth.
 
-Two source strategies:
-  1. AUTO:   SportsGameOdds API (free tier: 2,500 objects/month, 9 books
-             including Pinnacle/DK/FanDuel; verified 2026-07-18).
-             Set SPORTSGAMEODDS_KEY env var to enable.
-  2. MANUAL: CSV file at data/sharp_lines.csv. Format:
-       player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker
-     You copy today's sharp lines from your sportsbook of choice and paste
-     into this file. ~5 min/day for ~10-30 lines.
+Source strategies (priority order for build_sharp_index):
+  1. MANUAL: CSV at data/sharp_lines.csv
+  2. SportsGameOdds free tier — set SPORTSGAMEODDS_KEY
+  3. PropLine free tier (preferred) — set PROPLINE_API_KEY
+     Live Pinnacle / DK / FD / BetMGM + PrizePicks / Sleeper props.
+     1,000 req/day free; one bulk /odds call per sport.
 
 The matcher's rank_legs() accepts an optional `sharp_book_index` argument
 (built from this client) and uses the sharper price when available.
@@ -169,13 +167,21 @@ class SportsGameOddsClient:
 
 
 def _to_decimal(odds) -> Optional[float]:
-    """Convert decimal or American odds string/number to decimal."""
+    """Convert decimal or American odds string/number to decimal.
+
+    PropLine returns American integers (e.g. -165, 125, 100). Decimal
+    prices are typically in (1.0, ~50]. Treat |odds| >= 100 as American.
+    """
     if odds is None:
         return None
     if isinstance(odds, (int, float)):
-        # Likely already decimal
+        if odds <= -100 or odds >= 100:
+            am = int(odds)
+            if am < 0:
+                return 1.0 + 100.0 / abs(am)
+            return 1.0 + am / 100.0
         if odds > 1.0:
-            return float(odds)
+            return float(odds)  # already decimal
         return None
     s = str(odds).strip()
     if not s:
@@ -183,28 +189,266 @@ def _to_decimal(odds) -> Optional[float]:
     try:
         if s.startswith("+"):
             am = int(s[1:])
-            return 1 + am / 100
+            return 1.0 + am / 100.0
         if s.startswith("-"):
             am = int(s[1:])
-            return 1 + 100 / am
-        # Try decimal directly
-        return float(s)
+            return 1.0 + 100.0 / am
+        val = float(s)
+        if val <= -100 or val >= 100:
+            return _to_decimal(val)
+        if val > 1.0:
+            return val
+        return None
     except (ValueError, ZeroDivisionError):
         return None
+
+
+# ── PropLine (free tier: 1,000 req/day) ─────────────────────────────────────
+class PropLineClient:
+    """PropLine player-props API — DK/FD/Pinnacle + PrizePicks/Underdog/Sleeper.
+
+    Free tier (verified 2026-07-19):
+      - 1,000 requests / day, no credit card
+      - Books include pinnacle, draftkings, fanduel, betmgm, prizepicks,
+        underdog, sleeper
+      - Player props via /v1/sports/{sport}/odds?markets=...
+
+    Auth: ?apiKey=... or X-API-Key header.
+    Docs: https://prop-line.com/docs
+    """
+    BASE = "https://api.prop-line.com/v1"
+
+    # UD sport_id -> PropLine sport key
+    SPORT_MAP = {
+        "MLB": "baseball_mlb",
+        "NBA": "basketball_nba",
+        "NFL": "football_nfl",
+        "NHL": "hockey_nhl",
+        "WNBA": "basketball_wnba",
+        "CFB": "football_ncaaf",
+        "TENNIS": "tennis",
+        "FIFA": "soccer_fifa_world_cup",
+    }
+
+    # PropLine market key -> UD appearance_stat.stat name
+    MARKET_TO_UD_STAT = {
+        "batter_hits": "hits",
+        "batter_total_bases": "total_bases",
+        "batter_home_runs": "home_runs",
+        "batter_rbis": "rbis",
+        "batter_runs_scored": "runs",
+        "batter_stolen_bases": "stolen_bases",
+        "batter_walks": "walks",
+        "batter_strikeouts": "batter_strikeouts",
+        "pitcher_strikeouts": "strikeouts",
+        "pitcher_hits_allowed": "hits_allowed",
+        "pitcher_walks": "walks_allowed",
+        "pitcher_earned_runs": "earned_runs",
+        "player_points": "points",
+        "player_rebounds": "rebounds",
+        "player_assists": "assists",
+        "player_threes": "threes",
+        "player_steals": "steals",
+        "player_blocks": "blocks",
+        "player_turnovers": "turnovers",
+        "player_points_rebounds_assists": "pts_rebs_asts",
+        "player_shots_on_goal": "shots_on_goal",
+        "player_goals": "goals",
+        "player_saves": "saves",
+        "player_power_play_points": "power_play_points",
+        "player_pass_yds": "pass_yds",
+        "player_pass_tds": "pass_tds",
+        "player_rush_yds": "rush_yds",
+        "player_rush_tds": "rush_tds",
+        "player_reception_yds": "rec_yds",
+        "player_receptions": "receptions",
+        "player_anytime_td": "rec_tds",
+    }
+
+    # Prefer sharp / two-sided books; skip PrizePicks ±100 fluff for no-vig.
+    BOOK_PRIORITY = (
+        "pinnacle",
+        "draftkings",
+        "fanduel",
+        "betmgm",
+        "betrivers",
+        "bovada",
+        "sleeper",  # often has two-sided American prices
+        # underdog omitted — we already fetch UD live directly
+    )
+
+    DEFAULT_MARKETS_BY_SPORT = {
+        "baseball_mlb": (
+            "batter_hits,batter_total_bases,batter_home_runs,batter_rbis,"
+            "batter_runs_scored,batter_stolen_bases,batter_walks,"
+            "pitcher_strikeouts,pitcher_hits_allowed,pitcher_earned_runs"
+        ),
+        "basketball_nba": (
+            "player_points,player_rebounds,player_assists,player_threes,"
+            "player_steals,player_blocks,player_points_rebounds_assists"
+        ),
+        "basketball_wnba": (
+            "player_points,player_rebounds,player_assists,player_threes,"
+            "player_points_rebounds_assists"
+        ),
+        "football_nfl": (
+            "player_pass_yds,player_pass_tds,player_rush_yds,player_rush_tds,"
+            "player_reception_yds,player_receptions"
+        ),
+        "hockey_nhl": (
+            "player_points,player_assists,player_goals,player_shots_on_goal,"
+            "player_saves"
+        ),
+        "tennis": "player_aces,player_double_faults,player_games_won,player_break_points_won",
+    }
+
+    def __init__(self, api_key: str, cache_path: Optional[Path] = None,
+                 ttl_seconds: int = 600):
+        if not api_key:
+            raise ValueError("PropLine api_key required")
+        self.api_key = api_key
+        self.cache_path = cache_path
+        self.ttl_seconds = ttl_seconds
+        self.session = requests.Session()
+
+    def _get(self, path: str, params: dict, cache_key: str) -> object:
+        if self.cache_path:
+            cache_file = self.cache_path / f"propline_{cache_key}.json"
+            if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < self.ttl_seconds:
+                return json.loads(cache_file.read_text())
+        params = dict(params)
+        params["apiKey"] = self.api_key
+        r = self.session.get(f"{self.BASE}{path}", params=params, timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        if self.cache_path:
+            self.cache_path.mkdir(parents=True, exist_ok=True)
+            cache_file = self.cache_path / f"propline_{cache_key}.json"
+            cache_file.write_text(json.dumps(data))
+        return data
+
+    def fetch_player_props(
+        self,
+        sport_id: str,
+        bookmakers: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """Fetch two-sided player props for a UD sport_id.
+
+        Returns flat list of:
+          {player, stat, line, over_decimal, under_decimal, bookmaker, sport}
+        Prefer higher-priority books when the same player|stat|line appears
+        on multiple books (Pinnacle first).
+        """
+        sport_key = self.SPORT_MAP.get(sport_id)
+        if not sport_key:
+            return []
+        markets = self.DEFAULT_MARKETS_BY_SPORT.get(sport_key)
+        if not markets:
+            return []
+
+        books = bookmakers or list(self.BOOK_PRIORITY)
+        # One bulk call per sport — stays well under 1,000 req/day free quota.
+        data = self._get(
+            f"/sports/{sport_key}/odds",
+            {
+                "markets": markets,
+                "bookmakers": ",".join(books),
+            },
+            cache_key=f"odds_{sport_key}_{'_'.join(books[:4])}",
+        )
+        if not isinstance(data, list):
+            return []
+
+        # book_priority rank for conflict resolution
+        book_rank = {b: i for i, b in enumerate(self.BOOK_PRIORITY)}
+        best: dict[str, tuple[int, dict]] = {}
+
+        for event in data:
+            for book in event.get("bookmakers") or []:
+                book_key = (book.get("key") or "").lower()
+                if book_key not in book_rank:
+                    continue
+                # Group Over/Under by (market, player, point)
+                pairs: dict[tuple, dict] = {}
+                for market in book.get("markets") or []:
+                    mkey = market.get("key") or ""
+                    ud_stat = self.MARKET_TO_UD_STAT.get(mkey)
+                    if not ud_stat:
+                        continue
+                    # PrizePicks goblin/demon are alt lines — skip non-standard
+                    for outcome in market.get("outcomes") or []:
+                        dfs_type = outcome.get("dfs_odds_type")
+                        if dfs_type and dfs_type != "standard":
+                            continue
+                        side = (outcome.get("name") or "").strip()
+                        if side not in ("Over", "Under"):
+                            continue
+                        player = (outcome.get("description") or "").strip()
+                        point = outcome.get("point")
+                        if not player or point is None:
+                            continue
+                        try:
+                            line_val = float(point)
+                        except (TypeError, ValueError):
+                            continue
+                        dec = _to_decimal(outcome.get("price"))
+                        if dec is None:
+                            continue
+                        pair_key = (mkey, player, line_val)
+                        bucket = pairs.setdefault(pair_key, {"stat": ud_stat})
+                        if side == "Over":
+                            bucket["over_decimal"] = dec
+                        else:
+                            bucket["under_decimal"] = dec
+                        bucket["player"] = player
+                        bucket["line"] = line_val
+
+                for bucket in pairs.values():
+                    if "over_decimal" not in bucket or "under_decimal" not in bucket:
+                        continue
+                    # Skip useless even-money DFS shells (PP ±100 / 2.0/2.0)
+                    if (
+                        abs(bucket["over_decimal"] - 2.0) < 1e-9
+                        and abs(bucket["under_decimal"] - 2.0) < 1e-9
+                    ):
+                        continue
+                    prop = {
+                        "player": bucket["player"],
+                        "stat": bucket["stat"],
+                        "line": bucket["line"],
+                        "over_decimal": bucket["over_decimal"],
+                        "under_decimal": bucket["under_decimal"],
+                        "bookmaker": book_key,
+                        "sport": sport_id,
+                    }
+                    idx_key = (
+                        f"{_normalize_name(prop['player'])}|{prop['stat']}|"
+                        f"{prop['line']}"
+                    )
+                    rank = book_rank[book_key]
+                    prev = best.get(idx_key)
+                    if prev is None or rank < prev[0]:
+                        best[idx_key] = (rank, prop)
+
+        return [v for _, v in best.values()]
 
 
 # ── Unified index builder ──────────────────────────────────────────────────
 def build_sharp_index(manual_csv: Optional[Path] = None,
                       sgo_key: Optional[str] = None,
                       sgo_sports: Optional[list[str]] = None,
-                      cache_path: Optional[Path] = None) -> dict[str, dict]:
+                      cache_path: Optional[Path] = None,
+                      propline_key: Optional[str] = None,
+                      propline_sports: Optional[list[str]] = None) -> dict[str, dict]:
     """Build a sharp-book lookup index.
 
     Returns: {f"{normalize(player)}|{stat}": {over_decimal, under_decimal,
               bookmaker, line_value, source}}
 
-    Priority: SportsGameOdds entries override manual CSV entries
-    (SGO is fresher / sharper).
+    Priority (later sources override earlier):
+      1. Manual CSV
+      2. SportsGameOdds
+      3. PropLine (preferred — live Pinnacle/DK/FD + DFS books)
     """
     index: dict[str, dict] = {}
 
@@ -222,6 +466,8 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
             for sport in sgo_sports:
                 props = sgo.fetch_player_props(sport)
                 for p in props:
+                    if p.get("over_decimal") is None or p.get("under_decimal") is None:
+                        continue
                     key = f"{_normalize_name(p['player'])}|{p['stat']}"
                     index[key] = {
                         "over_decimal": p["over_decimal"],
@@ -232,5 +478,39 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
                     }
         except Exception as e:
             print(f"[sharp_books] SGO fetch failed: {e}")
+
+    # 3. PropLine (live multi-book props — preferred ground truth)
+    if propline_key and propline_sports:
+        try:
+            pl = PropLineClient(propline_key, cache_path=cache_path)
+            n_props = 0
+            for sport in propline_sports:
+                props = pl.fetch_player_props(sport)
+                for p in props:
+                    base_key = f"{_normalize_name(p['player'])}|{p['stat']}"
+                    line_key = f"{base_key}|{p['line']:g}"
+                    entry = {
+                        "over_decimal": p["over_decimal"],
+                        "under_decimal": p["under_decimal"],
+                        "bookmaker": p["bookmaker"],
+                        "line_value": p["line"],
+                        "source": f"propline-{sport}",
+                    }
+                    # Line-specific key (preferred match in rank_legs)
+                    index[line_key] = entry
+                    # Also keep a player|stat fallback — prefer higher-priority books
+                    prev = index.get(base_key)
+                    if prev is None or (
+                        PropLineClient.BOOK_PRIORITY.index(p["bookmaker"])
+                        if p["bookmaker"] in PropLineClient.BOOK_PRIORITY else 99
+                    ) < (
+                        PropLineClient.BOOK_PRIORITY.index(prev["bookmaker"])
+                        if prev.get("bookmaker") in PropLineClient.BOOK_PRIORITY else 99
+                    ):
+                        index[base_key] = entry
+                    n_props += 1
+            print(f"[sharp_books] PropLine indexed {n_props} props across {propline_sports}")
+        except Exception as e:
+            print(f"[sharp_books] PropLine fetch failed: {e}")
 
     return index
