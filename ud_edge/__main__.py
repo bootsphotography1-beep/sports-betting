@@ -174,6 +174,8 @@ def run_once(
     use_apisports: bool = True,
     n_entries: int = 1,
     full_game_only: bool = False,
+    use_scrapers: bool = True,
+    scrapers_only: bool = False,
 ) -> int:
     entry = UD_PAYOUTS[entry_type]
     effective_n_legs = top_n if top_n is not None else entry.n_legs
@@ -233,8 +235,8 @@ def run_once(
     try:
         from ud_edge.sharp_books_client import build_sharp_index
         import os
-        sgo_key = os.environ.get("SPORTSGAMEODDS_KEY", "")
-        propline_key = os.environ.get("PROPLINE_API_KEY", "")
+        sgo_key = "" if scrapers_only else os.environ.get("SPORTSGAMEODDS_KEY", "")
+        propline_key = "" if scrapers_only else os.environ.get("PROPLINE_API_KEY", "")
         sharp_csv = cache_path.parent / "sharp_lines.csv"
         # If SGO key present, fetch for all sports with active UD lines
         sgo_sports = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"] if sgo_key else None
@@ -242,6 +244,10 @@ def run_once(
         propline_sports = (
             ["MLB", "WNBA", "NFL", "NBA", "NHL", "TENNIS"] if propline_key else None
         )
+        # Owned scrapers currently cover MLB props; expand when sport filter set
+        scraper_sports = ["MLB"]
+        if sport_filter:
+            scraper_sports = [s for s in scraper_sports if s in sport_filter] or ["MLB"]
         sharp_index = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key or None,
@@ -249,6 +255,8 @@ def run_once(
             propline_key=propline_key or None,
             propline_sports=propline_sports,
             cache_path=cache_path.parent / "sharp_cache",
+            use_scrapers=use_scrapers,
+            scraper_sports=scraper_sports,
         )
         sources = set(v.get("source", "?") for v in sharp_index.values())
         books = set(v.get("bookmaker", "?") for v in sharp_index.values())
@@ -405,6 +413,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="Source name for --ingest-csv (default: prizepicks).")
     parser.add_argument("--ingest-prizepicks-clipboard", action="store_true",
                         help="Read the PrizePicks board from the Windows clipboard and ingest it.")
+    parser.add_argument("--no-scrapers", action="store_true",
+                        help="Disable owned DK/FanDuel scrapers (PropLine/SGO/CSV only).")
+    parser.add_argument("--scrapers-only", action="store_true",
+                        help="Use owned scrapers only — ignore PropLine/SGO API keys.")
 
     args = parser.parse_args(argv)
 
@@ -454,6 +466,8 @@ def main(argv: list[str] | None = None) -> int:
             save_path=save_path,
             n_entries=args.entries,
             full_game_only=args.full_game_only,
+            use_scrapers=not args.no_scrapers,
+            scrapers_only=args.scrapers_only,
         )
 
     if args.snapshot or args.stale_report:

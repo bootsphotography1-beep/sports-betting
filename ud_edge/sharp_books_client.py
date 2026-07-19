@@ -8,10 +8,15 @@ ground truth.
 
 Source strategies (priority order for build_sharp_index):
   1. MANUAL: CSV at data/sharp_lines.csv
-  2. SportsGameOdds free tier — set SPORTSGAMEODDS_KEY
-  3. PropLine free tier (preferred) — set PROPLINE_API_KEY
+  2. Owned scrapers (DraftKings + FanDuel public JSON) — no API key
+  3. SportsGameOdds free tier — set SPORTSGAMEODDS_KEY
+  4. PropLine free tier (optional overlay) — set PROPLINE_API_KEY
      Live Pinnacle / DK / FD / BetMGM + PrizePicks / Sleeper props.
      1,000 req/day free; one bulk /odds call per sport.
+
+Owned scrapers are the default path so the pipeline works without
+third-party odds keys. PropLine, when present, overrides matching keys
+(better two-sided + Pinnacle coverage).
 
 The matcher's rank_legs() accepts an optional `sharp_book_index` argument
 (built from this client) and uses the sharper price when available.
@@ -433,13 +438,56 @@ class PropLineClient:
         return [v for _, v in best.values()]
 
 
+_SCRAPER_BOOK_PRIORITY = ["draftkings", "fanduel", "bovada"]
+
+
+def _index_prop_rows(
+    index: dict[str, dict],
+    props: list[dict],
+    *,
+    source_default: str,
+    book_priority: Optional[list[str]] = None,
+) -> int:
+    """Merge prop rows into index. Returns count of rows considered."""
+    priority = book_priority or PropLineClient.BOOK_PRIORITY
+    n = 0
+    for p in props:
+        if p.get("over_decimal") is None or p.get("under_decimal") is None:
+            continue
+        base_key = f"{_normalize_name(p['player'])}|{p['stat']}"
+        line_key = f"{base_key}|{p['line']:g}"
+        entry = {
+            "over_decimal": p["over_decimal"],
+            "under_decimal": p["under_decimal"],
+            "bookmaker": p["bookmaker"],
+            "line_value": p["line"],
+            "source": p.get("source") or source_default,
+        }
+        index[line_key] = entry
+        prev = index.get(base_key)
+        new_rank = (
+            priority.index(p["bookmaker"]) if p["bookmaker"] in priority else 99
+        )
+        old_rank = (
+            priority.index(prev["bookmaker"])
+            if prev and prev.get("bookmaker") in priority
+            else 99
+        )
+        if prev is None or new_rank < old_rank:
+            index[base_key] = entry
+        n += 1
+    return n
+
+
 # ── Unified index builder ──────────────────────────────────────────────────
 def build_sharp_index(manual_csv: Optional[Path] = None,
                       sgo_key: Optional[str] = None,
                       sgo_sports: Optional[list[str]] = None,
                       cache_path: Optional[Path] = None,
                       propline_key: Optional[str] = None,
-                      propline_sports: Optional[list[str]] = None) -> dict[str, dict]:
+                      propline_sports: Optional[list[str]] = None,
+                      use_scrapers: bool = True,
+                      scraper_sports: Optional[list[str]] = None) -> dict[str, dict]:
     """Build a sharp-book lookup index.
 
     Returns: {f"{normalize(player)}|{stat}": {over_decimal, under_decimal,
@@ -447,8 +495,9 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
 
     Priority (later sources override earlier):
       1. Manual CSV
-      2. SportsGameOdds
-      3. PropLine (preferred — live Pinnacle/DK/FD + DFS books)
+      2. Owned scrapers (DK + FanDuel public endpoints)
+      3. SportsGameOdds
+      4. PropLine (optional overlay — live Pinnacle/DK/FD + DFS books)
     """
     index: dict[str, dict] = {}
 
@@ -459,7 +508,22 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
             v["source"] = "manual-csv"
             index[k] = v
 
-    # 2. SportsGameOdds
+    # 2. Owned scrapers (no third-party API key)
+    if use_scrapers:
+        try:
+            from ud_edge.book_scrapers import fetch_owned_sharp_props
+            sports = scraper_sports or ["MLB"]
+            props = fetch_owned_sharp_props(sports=sports, cache_path=cache_path)
+            n = _index_prop_rows(
+                index, props,
+                source_default="scraper",
+                book_priority=_SCRAPER_BOOK_PRIORITY,
+            )
+            print(f"[sharp_books] owned scrapers indexed {n} props across {sports}")
+        except Exception as e:
+            print(f"[sharp_books] owned scrapers failed: {e}")
+
+    # 3. SportsGameOdds
     if sgo_key and sgo_sports:
         try:
             sgo = SportsGameOddsClient(sgo_key, cache_path=cache_path)
@@ -479,36 +543,16 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
         except Exception as e:
             print(f"[sharp_books] SGO fetch failed: {e}")
 
-    # 3. PropLine (live multi-book props — preferred ground truth)
+    # 4. PropLine (optional overlay — preferred when key present)
     if propline_key and propline_sports:
         try:
             pl = PropLineClient(propline_key, cache_path=cache_path)
             n_props = 0
             for sport in propline_sports:
                 props = pl.fetch_player_props(sport)
-                for p in props:
-                    base_key = f"{_normalize_name(p['player'])}|{p['stat']}"
-                    line_key = f"{base_key}|{p['line']:g}"
-                    entry = {
-                        "over_decimal": p["over_decimal"],
-                        "under_decimal": p["under_decimal"],
-                        "bookmaker": p["bookmaker"],
-                        "line_value": p["line"],
-                        "source": f"propline-{sport}",
-                    }
-                    # Line-specific key (preferred match in rank_legs)
-                    index[line_key] = entry
-                    # Also keep a player|stat fallback — prefer higher-priority books
-                    prev = index.get(base_key)
-                    if prev is None or (
-                        PropLineClient.BOOK_PRIORITY.index(p["bookmaker"])
-                        if p["bookmaker"] in PropLineClient.BOOK_PRIORITY else 99
-                    ) < (
-                        PropLineClient.BOOK_PRIORITY.index(prev["bookmaker"])
-                        if prev.get("bookmaker") in PropLineClient.BOOK_PRIORITY else 99
-                    ):
-                        index[base_key] = entry
-                    n_props += 1
+                n_props += _index_prop_rows(
+                    index, props, source_default=f"propline-{sport}"
+                )
             print(f"[sharp_books] PropLine indexed {n_props} props across {propline_sports}")
         except Exception as e:
             print(f"[sharp_books] PropLine fetch failed: {e}")
