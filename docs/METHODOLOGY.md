@@ -58,10 +58,15 @@ is **a reasonable proxy** for fair probability for several reasons:
 3. **UD's overround is ~5%**, comparable to retail books like BetMGM/Caesars.
    Not as sharp as Pinnacle (~2-3%) but better than nothing.
 
-If you upgrade later to the-odds-api's paid tier ($79/mo) or add DK/FD
-cross-reference, the matcher architecture supports it: replace the
-`no_vig()` inputs with the sharper book's decimal odds and the rest of
-the pipeline is unchanged.
+If you upgrade later with PropLine / the-odds-api keys, or rely on the
+**owned scrapers** (`ud_edge/book_scrapers.py` — DraftKings + FanDuel public
+JSON, no third-party key), the matcher architecture already supports it:
+`build_sharp_index()` feeds sharp decimals into `rank_legs()`, which gates
+on same-side sharp probability when present. Scrapers are on by default;
+`--scrapers-only` ignores paid keys; `--no-scrapers` disables them.
+Note: many DK/FD batter props are milestones (`1+`, `2+`), mapped to
+Over `(N−0.5)` with a synthetic Under so overround = 1.0 — not true
+two-sided sharp prices like Pinnacle.
 
 ## Entry-type math
 
