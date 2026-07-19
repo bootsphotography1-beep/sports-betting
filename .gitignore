@@ -12,6 +12,7 @@ data/prizepicks_demo.csv
 data/draftkings_demo.csv
 data/injury_cache/
 data/apisports_cache/
+data/sharp_cache/
 reports/
 .env
 
