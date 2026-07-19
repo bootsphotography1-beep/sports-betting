@@ -188,42 +188,43 @@ observations so the detector can prove unchanged-vs-moved behavior.
 
 Events with `scheduled_at` in the past are excluded by default (`reject_started=True`).
 
-### Source limitations (verified 2026-07-18)
+### Source limitations & PropLine (planned primary multi-book feed)
 
-The following sources have been investigated and are **NOT** currently accessible:
+Direct scrapers for PrizePicks / Sleeper / Pinnacle from this host remain blocked
+or unavailable. **[PropLine](https://prop-line.com)** (`api.prop-line.com`) is the
+intended aggregator — it returns many books in one the-odds-api-compatible
+response, including the DFS/exchange sources we care about:
 
-| Source | Status | Reason |
-|---|---|---|
-| **PrizePicks** | ❌ 403 X-DataDome from this host | The Stack Overflow `/projections?...` method is currently challenged; keep a manual/partner-feed fallback |
-| **Sleeper** | ❌ No Picks API | Public API has no player-prop or Picks endpoint |
-| **Pinnacle** | ❌ Geo-blocked + closed | Public access closed 2025-07-23; geo-restricted |
-| **Southpaw** | ❌ Wrong type | FanDuel DFS contest wrapper, not a sportsbook props feed |
+| PropLine key | Use in ud-edge-bot |
+|---|---|
+| `underdog` | Two-way American prices (+ optional `payout_multiplier` on boosts) |
+| `prizepicks` | **Line-only** second source (synthetic +100/+100 — not for no-vig) |
+| `sleeper` | **Line-only** DFS second source when present |
+| `dabble` | **Line-only** DFS second source when present |
+| `pinnacle` / `draftkings` / `fanduel` | Same-side sharp true-prob / mispricing |
+| `kalshi` / `polymarket` | Exchange / prediction markets (mostly game lines today) |
 
-**Currently wired into snapshot history:** Underdog Fantasy (live) and any
-manually-supplied CSV (`--ingest-csv`); `--ingest-prizepicks-clipboard` reads
-the Windows clipboard with the parser copied from the sibling
-`prizepicks-edge-bot` project. `data/sharp_lines.csv` still powers one-run
-mispricing ranking, but is not yet automatically snapshotted as a second
-source. See the *Second source: CSV (and clipboard) ingestion* section
-above for a working two-source demo.
+**To activate:** export `PROPLINE_API_KEY=...` (client scaffold lives in
+[`ud_edge/propline_client.py`](ud_edge/propline_client.py)). Until the key is
+set, the bot keeps using live Underdog + manual CSV / optional SportsGameOdds.
+
+**Currently wired into snapshot history without PropLine:** Underdog Fantasy
+(live) and `--ingest-csv` / `--ingest-prizepicks-clipboard`. PropLine snapshot
+ingestion for PrizePicks/Sleeper/Dabble is next once the key is plugged in.
 
 ## Mispricing workflow (sharp-book cross-reference)
 
-The bot supports two sharp-book data sources:
+Priority when building the sharp index (later overrides earlier):
 
 1. **Manual CSV** (`data/sharp_lines.csv`) — works today, no signup needed.
-   Copy a handful of player-prop lines from DraftKings / FanDuel / BetMGM
-   into this file. Bot uses them as ground truth to detect mispricings.
+2. **SportsGameOdds** — optional `SPORTSGAMEODDS_KEY` (free tier; no Pinnacle).
+3. **PropLine** — optional `PROPLINE_API_KEY` (preferred). Includes Pinnacle +
+   Underdog two-way + DFS books. PrizePicks/Sleeper/Dabble synthetic even-money
+   prices are **excluded from true-prob ranking**; Pinnacle/DK/FD/clean Underdog
+   feed same-side mispricing.
 
-2. **SportsGameOdds free tier** — sign up at [sportsgameodds.com](https://sportsgameodds.com)
-   (free, no CC), then export `SPORTSGAMEODDS_KEY=...` to env. The adapter
-   attempts to fetch DK/FanDuel/other included-book props for 6 sports.
-   Pinnacle is **not** included in the free tier. Treat automated SGO parsing
-   as adapter code until it is validated end-to-end against a live key.
-
-The bot ranks legs where the **sharp book's true prob exceeds UD's true prob**
-by ≥2pp to the top of the report (these are the highest-confidence +EV
-opportunities — both books agree on the favorite side).
+The bot ranks legs where the **sharp book's same-side true prob exceeds UD's**
+(positive mispricing). Opposite-side sharp disagreement demotes/filters the leg.
 
 ## Entry-type cheat sheet
 
@@ -250,7 +251,8 @@ ud_edge/
 ├── ud_client.py             # /beta/v5/over_under_lines fetcher + parser (line value from N+/N- threshold)
 ├── apisports_client.py      # apisports.io cross-ref (football fixtures today, predictions)
 ├── injury_client.py         # ESPN public injury feed (NBA/NFL/MLB/NHL/WNBA/CFB/EPL/MLS/WC)
-├── sharp_books_client.py    # Sharp-book cross-ref (manual CSV + SportsGameOdds API)
+├── sharp_books_client.py    # Sharp-book cross-ref (CSV + SGO + PropLine)
+├── propline_client.py       # PropLine adapter (PROPLINE_API_KEY) — multi-book props
 ├── matcher.py               # rank_legs() + build_lineups() (multi-entry partitioner)
 ├── results_tracker.py        # log_picks + settle_pick + calibration_stats (per-pick tracking)
 ├── stale_pricing.py         # Phase 1: SnapshotStore, movement detector, stale opportunity detector

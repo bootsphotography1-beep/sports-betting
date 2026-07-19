@@ -114,6 +114,21 @@ favorite is the opposite side. Legs where the sharp book disagrees
 (same-side true prob < 50%) are demoted and usually filtered out. Positive
 mispricing (sharp same-side > UD) boosts rank.
 
+## PropLine (prop-line.com) — multi-book feed
+
+PropLine aggregates Underdog, PrizePicks, Sleeper, Dabble, Pinnacle, DK/FD,
+Kalshi, Polymarket, and more into one API. Set `PROPLINE_API_KEY` to enable
+[`ud_edge/propline_client.py`](../ud_edge/propline_client.py).
+
+- **True-prob / mispricing:** Pinnacle, DraftKings, FanDuel, and clean
+  Underdog two-way prices only.
+- **Line / stale detection:** PrizePicks, Sleeper, Dabble (often synthetic
+  +100/+100 — never de-vig those for EV).
+- **Exchanges:** Kalshi / Polymarket are mainly game lines today; useful for
+  fair-value screens later, not player-prop no-vig.
+- **Settlement:** PropLine `/results` graded props are the planned replacement
+  for manual `--settle` once the key is live.
+
 ## Calibration prerequisite
 
 Advertised EV assumes predicted true probs are calibrated. Settle picks with

@@ -198,14 +198,20 @@ def _to_decimal(odds) -> Optional[float]:
 def build_sharp_index(manual_csv: Optional[Path] = None,
                       sgo_key: Optional[str] = None,
                       sgo_sports: Optional[list[str]] = None,
+                      propline_key: Optional[str] = None,
+                      propline_sports: Optional[list[str]] = None,
                       cache_path: Optional[Path] = None) -> dict[str, dict]:
     """Build a sharp-book lookup index.
 
     Returns: {f"{normalize(player)}|{stat}": {over_decimal, under_decimal,
               bookmaker, line_value, source}}
 
-    Priority: SportsGameOdds entries override manual CSV entries
-    (SGO is fresher / sharper).
+    Priority (later sources override earlier):
+      1. Manual CSV
+      2. SportsGameOdds (if key)
+      3. PropLine (if key) — preferred: includes Pinnacle + Underdog two-way
+         + DFS books for line workflows (PrizePicks/Sleeper/Dabble excluded
+         from true-prob rows; see ``ud_edge.propline_client``)
     """
     index: dict[str, dict] = {}
 
@@ -223,6 +229,8 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
             for sport in sgo_sports:
                 props = sgo.fetch_player_props(sport)
                 for p in props:
+                    if p.get("over_decimal") is None or p.get("under_decimal") is None:
+                        continue
                     key = f"{_normalize_name(p['player'])}|{p['stat']}"
                     index[key] = {
                         "over_decimal": p["over_decimal"],
@@ -233,5 +241,26 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
                     }
         except Exception as e:
             print(f"[sharp_books] SGO fetch failed: {e}")
+
+    # 3. PropLine (prop-line.com) — activate when PROPLINE_API_KEY is provided
+    if propline_key and propline_sports:
+        try:
+            from ud_edge.propline_client import PropLineClient, fetch_sharp_props
+            pl = PropLineClient(
+                api_key=propline_key,
+                cache_path=(cache_path / "propline") if cache_path else None,
+            )
+            for sport in propline_sports:
+                for p in fetch_sharp_props(pl, sport):
+                    key = f"{_normalize_name(p['player'])}|{p['stat']}"
+                    index[key] = {
+                        "over_decimal": p["over_decimal"],
+                        "under_decimal": p["under_decimal"],
+                        "bookmaker": p["bookmaker"],
+                        "line_value": p["line"],
+                        "source": p.get("source", "propline"),
+                    }
+        except Exception as e:
+            print(f"[sharp_books] PropLine fetch failed: {e}")
 
     return index

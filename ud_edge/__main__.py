@@ -232,15 +232,22 @@ def run_once(
     sharp_index = None
     try:
         from ud_edge.sharp_books_client import build_sharp_index
+        from ud_edge.propline_client import propline_configured
         import os
         sgo_key = os.environ.get("SPORTSGAMEODDS_KEY", "")
+        propline_key = os.environ.get("PROPLINE_API_KEY", "")
         sharp_csv = cache_path.parent / "sharp_lines.csv"
-        # If SGO key present, fetch for all sports with active UD lines
-        sgo_sports = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"] if sgo_key else None
+        sports_with_props = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"]
+        sgo_sports = sports_with_props if sgo_key else None
+        propline_sports = sports_with_props if propline_key else None
+        if propline_configured():
+            print("[sharp] PropLine key detected — will prefer PropLine over SGO/CSV")
         sharp_index = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key or None,
             sgo_sports=sgo_sports,
+            propline_key=propline_key or None,
+            propline_sports=propline_sports,
             cache_path=cache_path.parent / "sharp_cache",
         )
         sources = set(v.get("source", "?") for v in sharp_index.values())
