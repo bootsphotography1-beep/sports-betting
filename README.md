@@ -229,11 +229,11 @@ opportunities — both books agree on the favorite side).
 
 | Entry | Payouts | Break-even | Verdict |
 |---|---|---|---|
-| 3-man-power | 3/3 = 6× | 54.95% | **Best risk/reward** for daily picks |
-| 4-man-power | 4/4 = 10× | 63.00% | Skip — too high a bar |
-| 4-flex | 4/4=6×, 3/4=1.5× | 57.81% | OK if you have 4 strong legs |
-| 5-flex | 5/5=10×, 4/5=4×, 3/5=2× | 57.81% | Better than 4-flex for variance |
-| **6-flex** | **6/6=25×, 5/6=2×, 4/6=0.4×** | **52.40%** | High variance, low break-even |
+| 3-man-power | 3/3 = 6× | 55.03% | **Best risk/reward** for daily picks |
+| 4-man-power | 4/4 = 10× | 56.23% | Skip unless you have 4 strong legs |
+| 4-flex | 4/4=6×, 3/4=1.5× | 55.03% | OK if you have 4 strong legs |
+| 5-flex | 5/5=10×, 4/5=4×, 3/5=2× | 42.16% | Low BE from generous partials; still high variance |
+| **6-flex** | **6/6=25×, 5/6=2×, 4/6=0.4×** | **54.21%** | High variance; need ≥55% per leg for clear +EV |
 
 The bot's daily report includes an entry-type comparison so you can pick
 the variance profile you want from the same leg pool.

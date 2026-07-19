@@ -198,7 +198,9 @@ class TestSchemaMigrationV1ToV2:
         import sqlite3, shutil
         from ud_edge.stale_pricing import SnapshotStore
 
-        real_path = "C:/Users/fin49/projects/ud-edge-bot/data/line_snapshots.sqlite3"
+        real_path = Path(__file__).resolve().parents[1] / "data" / "line_snapshots.sqlite3"
+        if not real_path.exists():
+            pytest.skip("No local snapshot DB at data/line_snapshots.sqlite3")
         copy_path = tmp_path / "real_v1_copy.sqlite3"
         shutil.copy2(real_path, copy_path)
 
@@ -2107,7 +2109,9 @@ class TestMigrationCorrectness:
         import sqlite3, shutil
         from ud_edge.stale_pricing import SnapshotStore
 
-        real_path = "C:/Users/fin49/projects/ud-edge-bot/data/line_snapshots.sqlite3"
+        real_path = Path(__file__).resolve().parents[1] / "data" / "line_snapshots.sqlite3"
+        if not real_path.exists():
+            pytest.skip("No local snapshot DB at data/line_snapshots.sqlite3")
         copy_path = tmp_path / "real_v1_4692.sqlite3"
         shutil.copy2(real_path, copy_path)
 

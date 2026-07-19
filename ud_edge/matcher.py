@@ -4,7 +4,7 @@ Takes parsed Leg objects from ud_client, applies the no_vig math to each,
 and returns RankedLeg objects sorted by edge descending.
 
 Per-leg break-even is supplied by the caller — it's entry-type-dependent
-(see flex_math.py). We default to 3-man-power (54.95%) which is the
+(see flex_math.py). We default to 3-man-power (55.03%) which is the
 recommended entry type per Derek @BTS methodology.
 """
 from __future__ import annotations
@@ -139,7 +139,7 @@ def get_player_status(leg: Leg, injury_index: Optional[dict] = None) -> str:
 
 def rank_legs(
     legs: list[Leg],
-    break_even: float = 0.5495,
+    break_even: float = 0.5503,
     min_true_prob: float = 0.55,
     min_edge_pp: float = 0.5,
     filter_trivial: bool = True,
@@ -276,26 +276,27 @@ def rank_legs(
                     s_over, s_under, s_overround = no_vig(
                         sharp["over_decimal"], sharp["under_decimal"]
                     )
-                    sharp_true_prob = s_over if s_over >= s_under else s_under
+                    # CRITICAL: compare sharp probability for the SAME side
+                    # we picked on UD — never favorite-vs-favorite across
+                    # opposite sides (that falsely boosts disagreements).
+                    sharp_true_prob = s_over if picked_side == "higher" else s_under
                     sharp_book = sharp.get("bookmaker", "sharp")
                     sharp_overround = s_overround
-                    # Mispricing = sharp_true_prob - ud_true_prob (positive = UD is too cheap on this side)
+                    # Positive = sharp agrees and is more confident than UD
                     mispricing_edge_pp = (sharp_true_prob - picked_prob) * 100
                     matched_sharp += 1
                 except (ValueError, KeyError):
                     pass
 
-        # ── Filter: only keep legs where the favorite side clears thresholds ──
-        # If sharp book disagrees and gives us more prob, use that for the gate.
-        effective_prob = max(picked_prob, sharp_true_prob) if sharp_true_prob else picked_prob
+        # ── Filter: gate on best available same-side estimate ──
+        # When sharp is present it is ground truth (can raise OR lower).
+        # Do NOT take max(UD, sharp) — that cherry-picks optimism.
+        effective_prob = sharp_true_prob if sharp_true_prob is not None else picked_prob
         effective_edge = edge_pp(effective_prob, break_even)
 
         if effective_prob < min_true_prob or effective_edge < min_edge_pp:
             skipped_threshold += 1
             continue
-
-        # Use the SHARPER prob for the sort key — surfaces mispricings
-        sort_prob = sharp_true_prob if sharp_true_prob else picked_prob
 
         ranked.append(
             RankedLeg(
@@ -317,10 +318,9 @@ def rank_legs(
             )
         )
 
-    # Sort by mispricing-aware key: legs where sharp book gives more confidence first
+    # Sort: boost only when sharp agrees on the same side with higher confidence
     def _sort_key(r: RankedLeg):
         if r.mispricing_edge_pp is not None and r.mispricing_edge_pp > 0:
-            # Sharp book agrees or disagrees positively — boost these to the top
             return (1, r.mispricing_edge_pp)
         return (0, r.picked_edge_pp)
 

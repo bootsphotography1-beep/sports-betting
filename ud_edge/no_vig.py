@@ -12,12 +12,17 @@ from __future__ import annotations
 
 
 def american_to_implied(american: int) -> float:
-    """Convert American odds -> raw implied probability (includes vig)."""
+    """Convert American odds -> raw implied probability (includes vig).
+
+    Correct formulas:
+      favorite (negative): |odds| / (|odds| + 100)   e.g. -110 → 110/210 ≈ 0.5238
+      underdog (positive): 100 / (odds + 100)         e.g. +110 → 100/210 ≈ 0.4762
+    """
     if american == 0:
         raise ValueError("american odds cannot be 0")
     if american < 0:
-        return 100.0 / (100.0 + abs(american))
-    return american / (american + 100.0)
+        return abs(american) / (abs(american) + 100.0)
+    return 100.0 / (american + 100.0)
 
 
 def decimal_to_implied(decimal_odds: float) -> float:

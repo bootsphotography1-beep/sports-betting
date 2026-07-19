@@ -67,14 +67,17 @@ the pipeline is unchanged.
 
 | Entry | n | Payouts | Per-leg break-even | EV at 55% / 60% |
 |---|---|---|---|---|
-| 3-man-power | 3 | 3/3 = 6× | 54.95% | -0.002 / +0.296 |
-| 4-flex | 4 | 4/4=6×, 3/4=1.5× | 57.81% | -0.082 / +0.190 |
-| 5-flex | 5 | 5/5=10×, 4/5=4×, 3/5=2× | 57.81% | -0.143 / +0.151 |
-| 6-flex | 6 | 6/6=25×, 5/6=2×, 4/6=0.4× | 52.40% | +0.066 / +0.585 |
+| 3-man-power | 3 | 3/3 = 6× | 55.03% | -0.002 / +0.296 |
+| 4-flex | 4 | 4/4=6×, 3/4=1.5× | 55.03% | -0.001 / +0.296 |
+| 5-flex | 5 | 5/5=10×, 4/5=4×, 3/5=2× | 42.16% | +0.76 / +1.41 |
+| 6-flex | 6 | 6/6=25×, 5/6=2×, 4/6=0.4× | 54.21% | +0.075 / +0.664 |
 
-(EV is net per $1 staked, accounting for the full binomial distribution.)
+(EV is net per $1 staked, accounting for the full binomial distribution.
+Break-evens are the exact EV=0 roots of each payout table — not padded
+"safety" thresholds. The old 52.40% 6-flex figure was wrong: it treated
+4/6 as a 1.0× return instead of Underdog's actual 0.4×.)
 
-**6-flex is positive EV even at 55% per leg** — that's why it's tempting —
+**6-flex is positive EV at 55% per leg** (about +$0.075 per dollar) —
 but it requires 6 simultaneous correct picks. A 5/6 still pays 2× (good),
 but a 4/6 only pays 0.4× (you lose 60% of your stake). And a 3/6 or worse
 pays nothing.

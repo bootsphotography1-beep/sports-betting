@@ -77,10 +77,10 @@ def self_test() -> int:
         print("  ✓ american_to_implied(0) raises ValueError")
 
     # Test 8: edge_pp calculation
-    if abs(edge_pp(0.55, 0.5495) - 0.05) > 0.001:
-        failures.append(f"edge_pp(0.55, 0.5495): expected 0.05, got {edge_pp(0.55, 0.5495):.4f}")
+    if abs(edge_pp(0.55, 0.5503) - (-0.03)) > 0.001:
+        failures.append(f"edge_pp(0.55, 0.5503): expected -0.03, got {edge_pp(0.55, 0.5503):.4f}")
     else:
-        print("  ✓ edge_pp(0.55, 0.5495) → 0.05pp")
+        print("  ✓ edge_pp(0.55, 0.5503) → -0.03pp")
 
     # Test 9: 3-man-power EV at 55% per leg
     entry = UD_PAYOUTS["3-man-power"]
@@ -151,7 +151,7 @@ def dry_run() -> int:
             lower_american=105, lower_decimal=2.05, lower_multiplier=1.10),
     ]
 
-    ranked = rank_legs(legs, break_even=0.5495)
+    ranked = rank_legs(legs, break_even=0.5503)
     print_console_summary(ranked, top_n=4)
 
     if not ranked:
@@ -518,12 +518,13 @@ def main(argv: list[str] | None = None) -> int:
                 except Exception:
                     obs_records = []
             if obs_records:
+                clip_captured_at = utc_now()
                 clip_ids = capture_from_observations(
                     obs_records, store,
-                    source="prizepicks", captured_at=captured_at,
+                    source="prizepicks", captured_at=clip_captured_at,
                 )
                 print(f"[snapshot] clipboard ingested {len(clip_ids)} obs at "
-                      f"{captured_at.isoformat()}")
+                      f"{clip_captured_at.isoformat()}")
             elif clip_text:
                 print("[snapshot] clipboard text wasn't CSV-shaped. "
                       "Run the sibling project's clipboard_to_csv.py and "

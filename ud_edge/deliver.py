@@ -51,6 +51,18 @@ def _fmt_side(leg: Leg, side: str) -> str:
     return f"{word} {leg.line_value:g} {leg.stat_name.replace('_', ' ')} {arrow}"
 
 
+def _effective_prob(r: RankedLeg) -> float:
+    """Best available same-side hit-rate estimate for EV.
+
+    Prefer sharp-book same-side true prob when present (ground truth);
+    otherwise fall back to UD's no-vig favorite-side prob. Never take
+    max(UD, sharp) — that cherry-picks the optimistic number.
+    """
+    if r.sharp_true_prob is not None:
+        return r.sharp_true_prob
+    return r.picked_true_prob
+
+
 def build_report(
     ranked: list[RankedLeg],
     entry_type: str = "6-flex",
@@ -67,11 +79,8 @@ def build_report(
 
     # Per-leg probability from the top N
     top_legs = ranked[:top_n]
-    # Use the SHARPER prob if available (otherwise UD's)
-    def effective_prob(r):
-        return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
     avg_prob = (
-        sum(effective_prob(r) for r in top_legs) / len(top_legs)
+        sum(_effective_prob(r) for r in top_legs) / len(top_legs)
         if top_legs else 0.0
     )
     ev, win_prob, median_payout = expected_value(entry, avg_prob) if top_legs else (0, 0, 0)
@@ -186,9 +195,7 @@ def build_multi_report(
         md.append("| Entry | Avg True% | EV/$1 | Win% | Med Payout | Rec | Mispricings |")
         md.append("|-------|-----------|-------|------|------------|-----|-------------|")
         for i, lineup in enumerate(lineups, 1):
-            def effective_prob(r):
-                return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
-            avg_prob = sum(effective_prob(r) for r in lineup) / len(lineup)
+            avg_prob = sum(_effective_prob(r) for r in lineup) / len(lineup)
             ev, win_prob, med = expected_value(entry, avg_prob)
             rec = _recommend_from_ev(ev)
             n_mis = sum(1 for r in lineup if r.sharp_true_prob is not None)
@@ -201,14 +208,12 @@ def build_multi_report(
 
     # ── Per-entry sections ──
     for i, lineup in enumerate(lineups, 1):
-        def effective_prob(r):
-            return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
-        avg_prob = sum(effective_prob(r) for r in lineup) / len(lineup)
+        avg_prob = sum(_effective_prob(r) for r in lineup) / len(lineup)
         ev, win_prob, median_payout = expected_value(entry, avg_prob)
         rec = _recommend_from_ev(ev)
 
         # Min true prob on this card (the floor — worst leg)
-        min_leg_prob = min(effective_prob(r) for r in lineup)
+        min_leg_prob = min(_effective_prob(r) for r in lineup)
         n_mis = sum(1 for r in lineup if r.sharp_true_prob is not None)
 
         md.append(f"## Entry #{i} — {entry.name}")

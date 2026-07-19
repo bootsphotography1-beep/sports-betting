@@ -11,45 +11,63 @@ from typing import Optional
 from ud_edge.models import FlexEntryType
 
 
-# Underdog Fantasy payout tables (verified July 2026)
+def _solve_break_even(payouts: dict[int, float], n_legs: int) -> float:
+    """Binary-search the per-leg hit rate where EV == 0 for the payout table."""
+    lo, hi = 0.01, 0.99
+    for _ in range(80):
+        mid = (lo + hi) / 2.0
+        ev = -1.0
+        for k in range(0, n_legs + 1):
+            binom = math.comb(n_legs, k)
+            ev += binom * (mid ** k) * ((1.0 - mid) ** (n_legs - k)) * payouts.get(k, 0.0)
+        if ev < 0:
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2.0, 4)
+
+
+# Underdog Fantasy payout tables (verified July 2026).
+# break_even values are the mathematically exact per-leg hit rates where EV=0
+# under an i.i.d. binomial model (not padded "safety" thresholds).
 UD_PAYOUTS: dict[str, FlexEntryType] = {
     # ── Power plays (all legs must hit) ──
     "2-man-power": FlexEntryType(
         name="2-man-power", n_legs=2,
         payouts={2: 3.0},
-        break_even=0.5700,
+        break_even=_solve_break_even({2: 3.0}, 2),  # ≈ 0.5774
     ),
     "3-man-power": FlexEntryType(
         name="3-man-power", n_legs=3,
         payouts={3: 6.0},
-        break_even=0.5495,
+        break_even=_solve_break_even({3: 6.0}, 3),  # ≈ 0.5503
     ),
     "4-man-power": FlexEntryType(
         name="4-man-power", n_legs=4,
         payouts={4: 10.0},
-        break_even=0.6300,  # realistic break-even given ~4% vig
+        break_even=_solve_break_even({4: 10.0}, 4),  # ≈ 0.5623
     ),
 
     # ── Flex plays (tiered payouts) ──
     "3-flex": FlexEntryType(
         name="3-flex", n_legs=3,
         payouts={3: 6.0, 2: 1.0},
-        break_even=0.5781,
+        break_even=_solve_break_even({3: 6.0, 2: 1.0}, 3),  # ≈ 0.4753
     ),
     "4-flex": FlexEntryType(
         name="4-flex", n_legs=4,
         payouts={4: 6.0, 3: 1.5},
-        break_even=0.5781,
+        break_even=_solve_break_even({4: 6.0, 3: 1.5}, 4),  # ≈ 0.5503
     ),
     "5-flex": FlexEntryType(
         name="5-flex", n_legs=5,
         payouts={5: 10.0, 4: 4.0, 3: 2.0},
-        break_even=0.5781,
+        break_even=_solve_break_even({5: 10.0, 4: 4.0, 3: 2.0}, 5),  # ≈ 0.4216
     ),
     "6-flex": FlexEntryType(
         name="6-flex", n_legs=6,
         payouts={6: 25.0, 5: 2.0, 4: 0.4},
-        break_even=0.5240,
+        break_even=_solve_break_even({6: 25.0, 5: 2.0, 4: 0.4}, 6),  # ≈ 0.5421
     ),
 }
 
@@ -84,8 +102,9 @@ def expected_value(entry: FlexEntryType, per_leg_prob: float) -> tuple[float, fl
 
     ev = 0.0
     win_prob = 0.0
-    payouts_at_hits = []
-    probs_at_hits = []
+    median_payout = 0.0
+    cum = 0.0
+    median_found = False
 
     for k in range(0, n + 1):
         # Binomial coefficient
@@ -95,22 +114,14 @@ def expected_value(entry: FlexEntryType, per_leg_prob: float) -> tuple[float, fl
         ev += prob_k * mult
         if mult > 0:
             win_prob += prob_k
-            payouts_at_hits.append((k, mult, prob_k))
-
-    ev -= 1.0  # subtract stake to get net EV
-
-    # Median payout: find hit-count k where cumulative prob crosses 0.5
-    # (only counting "wins" — k where multiplier > 0)
-    median_payout = 0.0
-    if payouts_at_hits:
-        # Sort by hit count descending (most payout first)
-        payouts_at_hits.sort(key=lambda x: -x[2])
-        cum = 0.0
-        for k, mult, prob_k in sorted(payouts_at_hits, key=lambda x: -x[1]):
+        # Median payout over the full outcome distribution (including 0x losses)
+        if not median_found:
             cum += prob_k
             if cum >= 0.5:
                 median_payout = mult
-                break
+                median_found = True
+
+    ev -= 1.0  # subtract stake to get net EV
 
     return ev, win_prob, median_payout
 

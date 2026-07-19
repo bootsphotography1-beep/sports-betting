@@ -14,22 +14,21 @@ from ud_edge.results_tracker import (
 
 # ── american_to_implied ────────────────────────────────────────────────────
 class TestAmericanToImplied:
-    def test_minus_110_is_47_62_pct(self):
-        # -110 = 100/(100+110) = 0.47619
-        assert abs(american_to_implied(-110) - 0.47619) < 0.001
+    def test_minus_110_is_52_38_pct(self):
+        # -110 favorite → |odds|/(|odds|+100) = 110/210 ≈ 0.52381
+        assert abs(american_to_implied(-110) - 0.52381) < 0.001
 
     def test_plus_110_is_47_62_pct(self):
-        # +110 = 110/(110+100) = 0.52381? No wait: +110 = 110/210 = 0.52381
-        # But that means at -110/+110, the favorite is UNDER (-110) at 47.62%.
-        assert abs(american_to_implied(110) - 0.52381) < 0.001
+        # +110 underdog → 100/(odds+100) = 100/210 ≈ 0.47619
+        assert abs(american_to_implied(110) - 0.47619) < 0.001
 
-    def test_minus_200_is_33_33_pct(self):
-        # -200 = 100/(100+200) = 0.3333
-        assert abs(american_to_implied(-200) - 0.33333) < 0.001
+    def test_minus_200_is_66_67_pct(self):
+        # -200 favorite → 200/300 ≈ 0.66667
+        assert abs(american_to_implied(-200) - 0.66667) < 0.001
 
-    def test_plus_200_is_66_67_pct(self):
-        # +200 = 200/300 = 0.66667
-        assert abs(american_to_implied(200) - 0.66667) < 0.001
+    def test_plus_200_is_33_33_pct(self):
+        # +200 underdog → 100/300 ≈ 0.33333
+        assert abs(american_to_implied(200) - 0.33333) < 0.001
 
     def test_zero_raises(self):
         with pytest.raises(ValueError):
@@ -119,10 +118,10 @@ class TestNoVig:
 # ── edge_pp ────────────────────────────────────────────────────────────────
 class TestEdgePp:
     def test_basic(self):
-        assert abs(edge_pp(0.55, 0.5495) - 0.05) < 0.001
+        assert abs(edge_pp(0.55, 0.5503) - (-0.03)) < 0.001
 
     def test_negative_edge(self):
-        assert abs(edge_pp(0.54, 0.5495) - (-0.95)) < 0.001
+        assert abs(edge_pp(0.54, 0.5503) - (-1.03)) < 0.001
 
 
 # ── pick_side ──────────────────────────────────────────────────────────────
@@ -146,11 +145,24 @@ class TestPickSide:
 class TestFlexMath:
     def test_3_man_power_break_even(self):
         # 3-man-power: 6x payout → break-even = 6^(-1/3) ≈ 0.5503
-        # The "54.95%" in published tables is rounded to 2dp from 0.5503
         import math
         assert abs(UD_PAYOUTS["3-man-power"].break_even - (1/6)**(1/3)) < 0.001
-        # The stored value should be the rounded-to-2dp version
-        assert abs(UD_PAYOUTS["3-man-power"].break_even - 0.5495) < 0.001
+        assert abs(UD_PAYOUTS["3-man-power"].break_even - 0.5503) < 0.001
+
+    def test_all_entry_break_evens_match_math(self):
+        """Every stored break_even must be the EV=0 root of its payout table."""
+        from ud_edge.flex_math import _solve_break_even
+        for name, entry in UD_PAYOUTS.items():
+            expected = _solve_break_even(entry.payouts, entry.n_legs)
+            assert abs(entry.break_even - expected) < 1e-9, (
+                f"{name}: stored={entry.break_even}, math={expected}"
+            )
+
+    def test_6_flex_break_even_is_not_the_old_wrong_524(self):
+        # Historical bug: 0.5240 was computed as if 4/6 paid 1.0x, not 0.4x.
+        # Correct BE for {6:25, 5:2, 4:0.4} is ≈ 0.5421.
+        assert abs(UD_PAYOUTS["6-flex"].break_even - 0.5421) < 0.001
+        assert UD_PAYOUTS["6-flex"].break_even > 0.53
 
     def test_6_flex_payout_tiers(self):
         e = UD_PAYOUTS["6-flex"]
@@ -160,18 +172,15 @@ class TestFlexMath:
         assert e.n_legs == 6
 
     def test_ev_at_exact_break_even_is_zero(self):
-        # At the mathematically exact break-even (6^(-1/3) ≈ 0.5503),
-        # EV should be ~0 for a power play. The stored 0.5495 is the
-        # rounded-to-2dp version, so EV there is slightly negative.
+        # At the mathematically exact break-even, EV should be ~0 for a power play.
         import math
         exact_be = (1/6) ** (1/3)
         entry = UD_PAYOUTS["3-man-power"]
         ev_at_exact, _, _ = expected_value(entry, exact_be)
         assert abs(ev_at_exact) < 1e-9
-        # At the stored (rounded) 0.5495, EV is slightly negative
+        # Stored break_even is rounded to 4dp — EV there is essentially zero
         ev_at_stored, _, _ = expected_value(entry, entry.break_even)
-        assert ev_at_stored < 0  # confirmed: -0.0045
-        assert abs(ev_at_stored) < 0.01  # but within rounding tolerance
+        assert abs(ev_at_stored) < 0.001
 
     def test_ev_positive_above_break_even(self):
         entry = UD_PAYOUTS["3-man-power"]
@@ -344,24 +353,45 @@ class TestSharpBooksClient:
         # Pinnacle: -180/+155 → implied 0.6429+0.6077 = 1.0861... wait that's wrong
         # Let's instead make Pinnacle use a tighter spread (lower overround):
         # Pinnacle: -170/+145 → 1.588/2.45 → implied 0.6296+0.4082 = 1.0378 → true 0.6066/0.3934
-        # Now UD best=0.5912, Pinnacle best=0.6066 → mispricing edge = +1.54pp ✓
+        # Now UD higher≈0.5912, Pinnacle same-side higher≈0.6066 → mispricing +1.54pp
         sharp = {
             "player a|points": {"over_decimal": 1.588, "under_decimal": 2.45,
                                 "bookmaker": "Pinnacle", "line_value": 27.5,
                                 "source": "test"},
             # Player B is NOT in the sharp index — no cross-ref
         }
-        ranked = rank_legs(legs, break_even=0.5495, injury_index=None, sharp_book_index=sharp)
+        ranked = rank_legs(legs, break_even=0.5503, injury_index=None, sharp_book_index=sharp)
         # Both legs should be present
         assert len(ranked) == 2, f"expected 2 legs, got {len(ranked)}: {ranked}"
         # Player A should rank first because the sharp book boosts it (mispricing signal)
         assert ranked[0].leg.player_name == "Player A"
         assert ranked[0].sharp_true_prob is not None
         assert ranked[0].mispricing_edge_pp is not None
-        assert ranked[0].mispricing_edge_pp > 0  # sharp book gives higher prob
+        assert ranked[0].mispricing_edge_pp > 0  # sharp book gives higher SAME-SIDE prob
         # Player B has no sharp entry — falls back to UD-implied edge
         assert ranked[1].leg.player_name == "Player B"
         assert ranked[1].sharp_true_prob is None
+
+    def test_sharp_opposite_side_favorite_does_not_boost(self):
+        """If sharp's favorite is the opposite side, do not boost UD's pick."""
+        from ud_edge.matcher import rank_legs
+        from ud_edge.models import Leg
+
+        # UD prices Over as favorite (~59%)
+        leg = Leg(line_id="1", player_id="p1", player_name="Player A",
+                  sport_id="NBA", stat_name="points", line_value=27.5,
+                  line_type="balanced",
+                  higher_american=-160, higher_decimal=1.625, higher_multiplier=0.95,
+                  lower_american=135, lower_decimal=2.35, lower_multiplier=0.95)
+        # Sharp prices Under as favorite (mirror odds) — same-side Over ≈ 40.9%
+        sharp = {
+            "player a|points": {"over_decimal": 2.45, "under_decimal": 1.588,
+                                "bookmaker": "Pinnacle", "line_value": 27.5,
+                                "source": "test"},
+        }
+        ranked = rank_legs([leg], break_even=0.5503, sharp_book_index=sharp)
+        # Same-side sharp Over ≈ 0.41 < min_true_prob 0.55 → filtered out
+        assert ranked == []
 
 
 # ── build_lineups (multi-entry 6-flex builder) ──────────────────────────────
@@ -385,11 +415,11 @@ class TestBuildLineups:
             ranked.append(RankedLeg(
                 leg=leg,
                 higher_true_prob=prob, higher_implied_prob=0.55,
-                higher_edge_pp=(prob - 0.5495) * 100,
+                higher_edge_pp=(prob - 0.5503) * 100,
                 lower_true_prob=1 - prob, lower_implied_prob=0.45,
-                lower_edge_pp=((1 - prob) - 0.5495) * 100,
+                lower_edge_pp=((1 - prob) - 0.5503) * 100,
                 picked_side="higher", picked_true_prob=prob,
-                picked_edge_pp=(prob - 0.5495) * 100,
+                picked_edge_pp=(prob - 0.5503) * 100,
                 overround=1.05,
             ))
         return ranked
@@ -549,8 +579,8 @@ class TestFullGameOnly:
 
     def test_full_game_only_drops_midgame(self):
         legs = self._mk_legs()
-        ranked_full = rank_legs(legs, break_even=0.524, full_game_only=True)
-        ranked_default = rank_legs(legs, break_even=0.524)
+        ranked_full = rank_legs(legs, break_even=0.5421, full_game_only=True)
+        ranked_default = rank_legs(legs, break_even=0.5421)
         # Default: all 6 may rank (assuming they pass threshold)
         # full_game_only: only 3 should pass (TENNIS sets_played, MLB hits, NBA points)
         ids_full = {r.leg.line_id for r in ranked_full}
@@ -565,7 +595,7 @@ class TestFullGameOnly:
     def test_full_game_only_off_keeps_all(self):
         """Without the flag, mid-game and obscure-sport legs are kept."""
         legs = self._mk_legs()
-        ranked = rank_legs(legs, break_even=0.524, full_game_only=False)
+        ranked = rank_legs(legs, break_even=0.5421, full_game_only=False)
         ids = {r.leg.line_id for r in ranked}
         # All 6 should pass (assuming thresholds met for each)
         assert "l2" in ids

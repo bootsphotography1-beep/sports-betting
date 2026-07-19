@@ -46,12 +46,15 @@ def _parse_line_value(higher: dict, lower: dict) -> Optional[float]:
 
     Returns None if neither option has a parseable threshold.
     """
-    # Prefer the lower option's "N-" form (most reliable since lower is always shown)
-    for opt, sign in [(lower, "-"), (higher, "+")]:
+    # Prefer the lower option's "N-" form (most reliable since lower is always shown).
+    # Use the sign from the matched string itself — not the loop hint — so a
+    # mislabeled shorter field cannot invert the line.
+    for opt in (lower, higher):
         short = opt.get("choice_display_name_shorter", "")
         m = re.match(r"^(\d+)([+\-])$", short.strip())
         if m:
             n = int(m.group(1))
+            sign = m.group(2)
             return float(n - 0.5) if sign == "+" else float(n + 0.5)
 
     # Fallback: try parsing the subheader ("Higher 27.5 Points")
