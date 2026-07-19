@@ -414,8 +414,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ingest-propline", action="store_true",
                         help="With --snapshot, also pull PrizePicks/Sleeper/Dabble/Pinnacle "
                              "props from PropLine (requires PROPLINE_API_KEY).")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="Build a live MLB mispricing HTML dashboard "
+                             "(reports/dashboard.html) showing which app to place on.")
+    parser.add_argument("--dashboard-out", type=str, default="reports/dashboard.html",
+                        help="Output path for --dashboard (default: reports/dashboard.html)")
 
     args = parser.parse_args(argv)
+
+    if args.dashboard:
+        from ud_edge.dashboard import write_dashboard
+        out = write_dashboard(out_path=Path(args.dashboard_out))
+        print(f"[dashboard] wrote {out.resolve()}")
+        print("[dashboard] PLACE EVERY MISPRICED PICK ON → Underdog Fantasy")
+        print("[dashboard] Sharp books (Pinnacle/DK/FD) are the signal only.")
+        return 0
 
     # ── Calibration report (early-exit) ────────────────────────────────────
     if args.calibration:
