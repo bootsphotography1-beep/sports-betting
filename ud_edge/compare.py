@@ -1,0 +1,272 @@
+"""Unified fantasy-vs-sharp comparison pipeline for the dashboard + CLI.
+
+Pulls Underdog (live) + optional CSV fantasy boards (PrizePicks / Sleeper),
+pulls sharp books (manual CSV / Odds API / SportsGameOdds), ranks mispricings,
+and returns sport-grouped opportunities ready for the white frontend.
+"""
+from __future__ import annotations
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+from ud_edge.copy_format import format_block, opportunities_to_dict
+from ud_edge.flex_math import UD_PAYOUTS
+from ud_edge.matcher import rank_legs, build_lineups
+from ud_edge.models import Leg, RankedLeg
+from ud_edge.sharp_books_client import build_sharp_index
+from ud_edge.ud_client import UDClient
+
+
+DEFAULT_SPORTS = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB", "MLS", "EPL"]
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def load_fantasy_csv_legs(csv_path: Path, source_name: str = "prizepicks") -> list[Leg]:
+    """Convert a PrizePicks/Sleeper-style CSV into Leg objects for ranking."""
+    from ud_edge.pp_clipboard import parse_prizepicks_csv
+
+    observations = parse_prizepicks_csv(csv_path, source_name=source_name)
+    legs: list[Leg] = []
+    for i, obs in enumerate(observations):
+        higher = float(obs.get("higher_decimal") or 0) or 1.91
+        lower = float(obs.get("lower_decimal") or 0) or 1.91
+        # Guard: decimal odds must be > 1
+        if higher <= 1.0:
+            higher = 1.91
+        if lower <= 1.0:
+            lower = 1.91
+        legs.append(
+            Leg(
+                line_id=f"{source_name}-{i}",
+                player_id=f"{source_name}-p{i}",
+                player_name=obs.get("player_name") or "Unknown",
+                sport_id=(obs.get("sport_id") or "UNK").upper(),
+                match_title=obs.get("match_title") or None,
+                scheduled_at=obs.get("scheduled_at") or None,
+                stat_name=(obs.get("stat_name") or "points").lower(),
+                line_value=float(obs.get("line_value") or 0),
+                line_type="balanced",
+                higher_american=-110,
+                higher_decimal=higher,
+                higher_multiplier=0.9,
+                lower_american=-110,
+                lower_decimal=lower,
+                lower_multiplier=0.9,
+            )
+        )
+    return legs
+
+
+def collect_fantasy_legs(
+    *,
+    cache_path: Optional[Path] = None,
+    sport_filter: Optional[set[str]] = None,
+    fantasy_csvs: Optional[list[tuple[Path, str]]] = None,
+    force_fetch: bool = True,
+) -> tuple[list[Leg], dict]:
+    """Fetch Underdog + optional fantasy CSV boards.
+
+    Returns (legs, meta) where meta describes source counts.
+    """
+    root = _project_root()
+    cache_path = cache_path or (root / "data" / "ud_lines_cache.json")
+    meta = {"sources": {}, "errors": []}
+
+    legs: list[Leg] = []
+    try:
+        client = UDClient(cache_path=cache_path)
+        data = client.fetch(force=force_fetch)
+        ud_legs = client.parse_legs(data, sport_filter=sport_filter)
+        legs.extend(ud_legs)
+        meta["sources"]["underdog"] = len(ud_legs)
+    except Exception as e:
+        meta["errors"].append(f"underdog: {e}")
+
+    for path, source in fantasy_csvs or []:
+        try:
+            if path.exists():
+                csv_legs = load_fantasy_csv_legs(path, source_name=source)
+                if sport_filter:
+                    csv_legs = [l for l in csv_legs if (l.sport_id or "") in sport_filter]
+                legs.extend(csv_legs)
+                meta["sources"][source] = meta["sources"].get(source, 0) + len(csv_legs)
+        except Exception as e:
+            meta["errors"].append(f"{source}: {e}")
+
+    return legs, meta
+
+
+def collect_sharp_index(
+    *,
+    data_dir: Optional[Path] = None,
+    sports: Optional[list[str]] = None,
+) -> tuple[dict, dict]:
+    """Build sharp-book index from CSV + optional Odds API / SGO keys."""
+    root = _project_root()
+    data_dir = data_dir or (root / "data")
+    sports = sports or DEFAULT_SPORTS
+    meta = {"count": 0, "sources": [], "errors": []}
+
+    sharp_csv = data_dir / "sharp_lines.csv"
+    sgo_key = os.environ.get("SPORTSGAMEODDS_KEY", "") or None
+    odds_key = os.environ.get("ODDS_API_KEY", "") or None
+
+    try:
+        index = build_sharp_index(
+            manual_csv=sharp_csv if sharp_csv.exists() else None,
+            sgo_key=sgo_key,
+            sgo_sports=sports if sgo_key else None,
+            odds_api_key=odds_key,
+            odds_api_sports=sports if odds_key else None,
+            cache_path=data_dir / "sharp_cache",
+        )
+        meta["count"] = len(index)
+        meta["sources"] = sorted({v.get("source", "?") for v in index.values()})
+        return index, meta
+    except Exception as e:
+        meta["errors"].append(str(e))
+        return {}, meta
+
+
+def compare_fantasy_vs_sharp(
+    *,
+    entry_type: str = "6-flex",
+    min_true_prob: float = 0.55,
+    min_edge_pp: float = 0.5,
+    sport_filter: Optional[set[str]] = None,
+    full_game_only: bool = True,
+    mispriced_only: bool = False,
+    fantasy_csvs: Optional[list[tuple[Path, str]]] = None,
+    n_entries: int = 4,
+    force_fetch: bool = True,
+) -> dict:
+    """Run the full comparison and return a dashboard-ready payload."""
+    root = _project_root()
+    data_dir = root / "data"
+    entry = UD_PAYOUTS[entry_type]
+
+    injury_index = None
+    try:
+        from ud_edge.injury_client import ESPNInjuryClient
+        injury_client = ESPNInjuryClient(
+            cache_path=data_dir / "injury_cache",
+            ttl_seconds=1800,
+        )
+        injury_index = injury_client.fetch_all_sports()
+    except Exception:
+        injury_index = None
+
+    # Default fantasy CSVs if present
+    if fantasy_csvs is None:
+        fantasy_csvs = []
+        for name, source in (
+            ("prizepicks_demo.csv", "prizepicks"),
+            ("sleeper_board.csv", "sleeper"),
+            ("prizepicks_board.csv", "prizepicks"),
+        ):
+            p = data_dir / name
+            if p.exists() and "demo" not in name:
+                fantasy_csvs.append((p, source))
+
+    legs, fantasy_meta = collect_fantasy_legs(
+        cache_path=data_dir / "ud_lines_cache.json",
+        sport_filter=sport_filter,
+        fantasy_csvs=fantasy_csvs,
+        force_fetch=force_fetch,
+    )
+    sharp_index, sharp_meta = collect_sharp_index(
+        data_dir=data_dir,
+        sports=sorted(sport_filter) if sport_filter else DEFAULT_SPORTS,
+    )
+
+    ranked = rank_legs(
+        legs,
+        break_even=entry.break_even,
+        min_true_prob=min_true_prob,
+        min_edge_pp=min_edge_pp,
+        injury_index=injury_index,
+        sharp_book_index=sharp_index or None,
+        full_game_only=full_game_only,
+    )
+
+    if mispriced_only:
+        ranked = [
+            r for r in ranked
+            if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
+        ]
+
+    # Group by sport
+    by_sport: dict[str, list[RankedLeg]] = {}
+    for r in ranked:
+        sport = (r.leg.sport_id or "UNK").upper()
+        by_sport.setdefault(sport, []).append(r)
+
+    sports_payload = []
+    for sport in sorted(by_sport.keys()):
+        sport_legs = by_sport[sport]
+        sports_payload.append({
+            "sport": sport,
+            "count": len(sport_legs),
+            "mispriced_count": sum(
+                1 for r in sport_legs
+                if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
+            ),
+            "opportunities": [opportunities_to_dict(r) for r in sport_legs],
+            "copy": {
+                "prizepicks": format_block(sport_legs, "prizepicks", sport=sport),
+                "sleeper": format_block(sport_legs, "sleeper", sport=sport),
+                "underdog": format_block(sport_legs, "underdog", sport=sport),
+                "generic": format_block(sport_legs, "generic", sport=sport),
+            },
+        })
+
+    lineups = build_lineups(ranked, n_entries=n_entries, n_legs=entry.n_legs)
+    lineup_payload = []
+    for i, lineup in enumerate(lineups, 1):
+        lineup_payload.append({
+            "entry": i,
+            "n_legs": len(lineup),
+            "avg_true_prob": round(
+                sum(r.picked_true_prob for r in lineup) / len(lineup), 4
+            ),
+            "opportunities": [opportunities_to_dict(r) for r in lineup],
+            "copy": {
+                "prizepicks": format_block(lineup, "prizepicks", include_header=True),
+                "sleeper": format_block(lineup, "sleeper", include_header=True),
+                "underdog": format_block(lineup, "underdog", include_header=True),
+            },
+        })
+
+    return {
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "entry_type": entry_type,
+        "min_true_prob": min_true_prob,
+        "min_edge_pp": min_edge_pp,
+        "full_game_only": full_game_only,
+        "mispriced_only": mispriced_only,
+        "totals": {
+            "legs_scanned": len(legs),
+            "opportunities": len(ranked),
+            "mispriced": sum(
+                1 for r in ranked
+                if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
+            ),
+            "sports": len(by_sport),
+            "lineups": len(lineups),
+        },
+        "fantasy_meta": fantasy_meta,
+        "sharp_meta": sharp_meta,
+        "sports": sports_payload,
+        "lineups": lineup_payload,
+        "flat": [opportunities_to_dict(r) for r in ranked],
+        "copy_all": {
+            "prizepicks": format_block(ranked, "prizepicks"),
+            "sleeper": format_block(ranked, "sleeper"),
+            "underdog": format_block(ranked, "underdog"),
+            "generic": format_block(ranked, "generic"),
+        },
+    }

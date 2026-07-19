@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Edge Board — Sharp vs Fantasy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div class="atmosphere" aria-hidden="true"></div>
+
+  <header class="hero">
+    <div class="hero-inner">
+      <p class="brand">Edge Board</p>
+      <h1 class="headline">Sharp books vs soft fantasy lines</h1>
+      <p class="lede">
+        Pull sharp sportsbook prices, flag inaccurate fantasy props, and copy
+        ready-to-paste lines into PrizePicks, Sleeper, and Underdog.
+      </p>
+      <div class="cta-row">
+        <button type="button" class="btn primary" id="btn-refresh">Refresh slate</button>
+        <button type="button" class="btn ghost" id="btn-copy-all-ud">Copy all · Underdog</button>
+        <button type="button" class="btn ghost" id="btn-copy-all-pp">Copy all · PrizePicks</button>
+        <button type="button" class="btn ghost" id="btn-copy-all-sl">Copy all · Sleeper</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="toolbar" aria-label="Filters">
+      <label class="field">
+        <span>Entry</span>
+        <select id="entry">
+          <option value="6-flex" selected>6-flex</option>
+          <option value="5-flex">5-flex</option>
+          <option value="3-man-power">3-man-power</option>
+          <option value="4-flex">4-flex</option>
+        </select>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="full-game" checked />
+        <span>Full-game only</span>
+      </label>
+      <label class="field check">
+        <input type="checkbox" id="mispriced-only" />
+        <span>Mispriced ≥2pp only</span>
+      </label>
+      <div class="status" id="status">Waiting for slate…</div>
+    </section>
+
+    <nav class="sport-tabs" id="sport-tabs" aria-label="Sports"></nav>
+
+    <section class="meta-strip" id="meta-strip" hidden>
+      <div><strong id="meta-opps">0</strong> opportunities</div>
+      <div><strong id="meta-mis">0</strong> mispriced</div>
+      <div><strong id="meta-sharp">0</strong> sharp lines</div>
+      <div id="meta-sources">—</div>
+    </section>
+
+    <section id="sport-panels" class="sport-panels"></section>
+
+    <section class="lineups" id="lineups" hidden>
+      <div class="section-head">
+        <h2>Built lineups</h2>
+        <p>Disjoint entries ready to paste into your fantasy apps.</p>
+      </div>
+      <div id="lineup-list"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

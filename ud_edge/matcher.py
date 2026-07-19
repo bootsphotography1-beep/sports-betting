@@ -256,46 +256,61 @@ def rank_legs(
         mispricing_edge_pp: Optional[float] = None
 
         if sharp_book_index:
-            from ud_edge.injury_client import normalize_name
-            # Try direct match first
-            sharp = sharp_book_index.get(
-                f"{normalize_name(leg.player_name)}|{leg.stat_name}"
+            from ud_edge.sharp_books_client import find_sharp_match
+            sharp = find_sharp_match(
+                sharp_book_index,
+                leg.player_name,
+                leg.stat_name,
+                leg.line_value,
+                line_tolerance=LINE_TOLERANCE,
             )
-            # If direct match fails, try fuzzy match (same player, similar line)
-            if sharp is None:
-                for k, v in sharp_book_index.items():
-                    if not k.endswith(f"|{leg.stat_name}"):
-                        continue
-                    if normalize_name(k.split("|")[0]) == normalize_name(leg.player_name):
-                        if abs(v.get("line_value", 0) - leg.line_value) <= LINE_TOLERANCE:
-                            sharp = v
-                            break
 
             if sharp is not None:
                 try:
                     s_over, s_under, s_overround = no_vig(
                         sharp["over_decimal"], sharp["under_decimal"]
                     )
-                    sharp_true_prob = s_over if s_over >= s_under else s_under
+                    # Side-aligned: compare sharp OVER to UD higher, UNDER to lower.
+                    # If sharp disagrees with UD's favorite side, flip the pick
+                    # to the sharp-favored side when that side clears thresholds.
+                    sharp_for_higher = s_over
+                    sharp_for_lower = s_under
+                    sharp_fav_side = "higher" if s_over >= s_under else "lower"
+                    sharp_fav_prob = max(s_over, s_under)
+
+                    if sharp_fav_side != picked_side:
+                        # Sharp book disagrees — follow sharp when it's stronger
+                        # than UD's favorite by ≥2pp (real mispricing signal).
+                        if (sharp_fav_prob - picked_prob) * 100 >= 2.0:
+                            picked_side = sharp_fav_side
+                            picked_prob = (
+                                true_over if picked_side == "higher" else true_under
+                            )
+                            picked_edge = edge_pp(picked_prob, break_even)
+
+                    sharp_true_prob = (
+                        sharp_for_higher if picked_side == "higher" else sharp_for_lower
+                    )
                     sharp_book = sharp.get("bookmaker", "sharp")
                     sharp_overround = s_overround
-                    # Mispricing = sharp_true_prob - ud_true_prob (positive = UD is too cheap on this side)
+                    # Mispricing = sharp_same_side - ud_same_side
+                    # Positive = fantasy platform underprices this side vs sharp.
                     mispricing_edge_pp = (sharp_true_prob - picked_prob) * 100
                     matched_sharp += 1
-                except (ValueError, KeyError):
+                except (ValueError, KeyError, TypeError):
                     pass
 
         # ── Filter: only keep legs where the favorite side clears thresholds ──
-        # If sharp book disagrees and gives us more prob, use that for the gate.
-        effective_prob = max(picked_prob, sharp_true_prob) if sharp_true_prob else picked_prob
+        # Prefer side-aligned sharp prob when sharp agrees this side is stronger.
+        if sharp_true_prob is not None and mispricing_edge_pp is not None and mispricing_edge_pp > 0:
+            effective_prob = sharp_true_prob
+        else:
+            effective_prob = picked_prob
         effective_edge = edge_pp(effective_prob, break_even)
 
         if effective_prob < min_true_prob or effective_edge < min_edge_pp:
             skipped_threshold += 1
             continue
-
-        # Use the SHARPER prob for the sort key — surfaces mispricings
-        sort_prob = sharp_true_prob if sharp_true_prob else picked_prob
 
         ranked.append(
             RankedLeg(
@@ -320,7 +335,7 @@ def rank_legs(
     # Sort by mispricing-aware key: legs where sharp book gives more confidence first
     def _sort_key(r: RankedLeg):
         if r.mispricing_edge_pp is not None and r.mispricing_edge_pp > 0:
-            # Sharp book agrees or disagrees positively — boost these to the top
+            # Fantasy line is soft vs sharp on the same side — boost to top
             return (1, r.mispricing_edge_pp)
         return (0, r.picked_edge_pp)
 

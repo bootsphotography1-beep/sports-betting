@@ -194,11 +194,20 @@ class TestSchemaMigrationV1ToV2:
         assert cur.fetchone()[0] == "2"
 
     def test_migration_preserves_real_v1_db_rows(self, tmp_path):
-        """Migrating the real v1 DB (data/line_snapshots.sqlite3) must preserve all observations."""
+        """Migrating a real v1 DB must preserve all observations when present."""
         import sqlite3, shutil
+        from pathlib import Path
         from ud_edge.stale_pricing import SnapshotStore
 
-        real_path = "C:/Users/fin49/projects/ud-edge-bot/data/line_snapshots.sqlite3"
+        candidates = [
+            Path("data/line_snapshots.sqlite3"),
+            Path("/workspace/data/line_snapshots.sqlite3"),
+            Path("C:/Users/fin49/projects/ud-edge-bot/data/line_snapshots.sqlite3"),
+        ]
+        real_path = next((p for p in candidates if p.exists()), None)
+        if real_path is None:
+            pytest.skip("No local line_snapshots.sqlite3 available for migration test")
+
         copy_path = tmp_path / "real_v1_copy.sqlite3"
         shutil.copy2(real_path, copy_path)
 
@@ -2102,12 +2111,20 @@ class TestMigrationCorrectness:
             f"idx_snapshots_captured must exist after migration, found: {indexes}"
 
     def test_real_v1_db_copy_preserves_4692_rows(self, tmp_path):
-        """The real v1 DB copy (from test_migration_preserves_real_v1_db_rows)
-        must preserve all observations through a fresh migration."""
+        """A real snapshot DB must preserve all observations through migration."""
         import sqlite3, shutil
+        from pathlib import Path
         from ud_edge.stale_pricing import SnapshotStore
 
-        real_path = "C:/Users/fin49/projects/ud-edge-bot/data/line_snapshots.sqlite3"
+        candidates = [
+            Path("data/line_snapshots.sqlite3"),
+            Path("/workspace/data/line_snapshots.sqlite3"),
+            Path("C:/Users/fin49/projects/ud-edge-bot/data/line_snapshots.sqlite3"),
+        ]
+        real_path = next((p for p in candidates if p.exists()), None)
+        if real_path is None:
+            pytest.skip("No local line_snapshots.sqlite3 available for migration test")
+
         copy_path = tmp_path / "real_v1_4692.sqlite3"
         shutil.copy2(real_path, copy_path)
 

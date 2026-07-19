@@ -1,15 +1,16 @@
 # ud-edge-bot
 
-**No-vig +EV detector for Underdog Fantasy player props.**
+**Sharp-book vs fantasy mispricing detector** for Underdog, PrizePicks, and Sleeper.
 
-Fetches Underdog's live player-prop board, strips the bookmaker's vig from
-both-sided odds, ranks legs by statistical edge, and outputs a daily Markdown
-report for use as a 3-man-power / 5-flex / 6-flex / etc. entry.
+Fetches Underdog's live player-prop board (plus optional PrizePicks/Sleeper CSV
+boards), pulls sharp/reputable sportsbook prices, strips vig, ranks soft fantasy
+lines, and serves a white **Edge Board** dashboard so you can browse by sport and
+copy-paste picks into fantasy apps.
 
 ## Why this works
 
-Underdog's `/beta/v5/over_under_lines` endpoint returns **6,718 player-prop
-lines** across 17 sports — with **both sides priced** (American + decimal
+Underdog's `/beta/v5/over_under_lines` endpoint returns **thousands of player-prop
+lines** across many sports — with **both sides priced** (American + decimal
 odds + payout multiplier). When a book prices both sides of a prop, we can
 strip the vig and recover the true probability of each side:
 
@@ -21,14 +22,15 @@ true_over     = implied_over  / overround
 true_under    = implied_under / overround
 ```
 
-The **favorite side after vig removal** is the +EV side. Compare against
-the entry-type break-even and rank.
+The **favorite side after vig removal** is the +EV side. When a sharp book
+(DraftKings / FanDuel / BetMGM / manual Pinnacle CSV) disagrees with the fantasy
+line on the **same side**, that mispricing is boosted to the top of the board.
 
 ## Quick start
 
 ```bash
 cd ~/projects/ud-edge-bot
-uv venv && uv pip install -e ".[dev]"
+uv venv && uv pip install -e ".[dev,dashboard]"
 
 # 1. Math self-test (no network, ~2 sec)
 python -m ud_edge --self-test
@@ -49,16 +51,44 @@ python -m ud_edge --once --min-true-prob 0.52 --min-edge-pp 0.1
 python -m ud_edge --once --entry 6-flex --save reports/$(date +%F).md
 
 # 7. Build 3-4 disjoint 6-flex entries from the same edge pool
-#    (Entry #1 = top-6, Entry #2 = next 6, ... — no shared legs)
 python -m ud_edge --once --entry 6-flex --entries 4 --save reports/$(date +%F)_multi.md
 
 # 8. Same, but with --full-game-only to drop mid-game / obscure-sport props
 python -m ud_edge --once --entry 6-flex --entries 4 --full-game-only
 
-# 9. Check calibration after settling some picks
-python -m ud_edge --settle 0:hit:29.5   # mark pick #0 as a HIT with actual stat 29.5
-python -m ud_edge --calibration         # see Brier score + log-loss + bucket accuracy
+# 9. Launch the white Edge Board dashboard on your computer
+python -m ud_edge --serve
+# → http://127.0.0.1:8787
 ```
+
+## Edge Board dashboard
+
+```bash
+pip install -e ".[dashboard]"
+python -m ud_edge --serve --host 127.0.0.1 --port 8787
+```
+
+Open **http://127.0.0.1:8787** in your browser. The board:
+
+- Divides opportunities by **sport** (tabs + per-sport sections)
+- Highlights legs where sharp books disagree with soft fantasy prices (≥2pp)
+- Builds disjoint lineups you can paste into apps
+- One-click **Copy** buttons for PrizePicks / Sleeper / Underdog formats
+  (per pick, per sport, or entire slate)
+
+Optional env keys for live sharp pulls:
+
+| Env var | Source |
+|---|---|
+| `ODDS_API_KEY` | [The Odds API](https://the-odds-api.com) player props (DK/FD/BetMGM, …) |
+| `SPORTSGAMEODDS_KEY` | [SportsGameOdds](https://sportsgameodds.com) free tier |
+
+Without keys, `data/sharp_lines.csv` is still used as the sharp ground truth
+(~5 min/day to paste 10–30 lines from your sportsbook of choice).
+
+PrizePicks / Sleeper live APIs remain blocked (DataDome / no public Picks API).
+Drop exported boards into `data/prizepicks_board.csv` or `data/sleeper_board.csv`
+(same CSV columns as the demo files) and the dashboard will merge them.
 
 ## Daily cron
 
@@ -209,21 +239,23 @@ above for a working two-source demo.
 
 ## Mispricing workflow (sharp-book cross-reference)
 
-The bot supports two sharp-book data sources:
+The bot supports three sharp-book data sources:
 
 1. **Manual CSV** (`data/sharp_lines.csv`) — works today, no signup needed.
-   Copy a handful of player-prop lines from DraftKings / FanDuel / BetMGM
-   into this file. Bot uses them as ground truth to detect mispricings.
+   Copy a handful of player-prop lines from DraftKings / FanDuel / BetMGM /
+   Pinnacle into this file. Bot uses them as ground truth to detect mispricings.
 
-2. **SportsGameOdds free tier** — sign up at [sportsgameodds.com](https://sportsgameodds.com)
-   (free, no CC), then export `SPORTSGAMEODDS_KEY=...` to env. The adapter
-   attempts to fetch DK/FanDuel/other included-book props for 6 sports.
-   Pinnacle is **not** included in the free tier. Treat automated SGO parsing
-   as adapter code until it is validated end-to-end against a live key.
+2. **The Odds API** — export `ODDS_API_KEY=...`. Pulls US-book player props
+   (DraftKings, FanDuel, BetMGM, …) for NBA/NFL/MLB/NHL/WNBA/CFB and more.
 
-The bot ranks legs where the **sharp book's true prob exceeds UD's true prob**
-by ≥2pp to the top of the report (these are the highest-confidence +EV
-opportunities — both books agree on the favorite side).
+3. **SportsGameOdds free tier** — sign up at [sportsgameodds.com](https://sportsgameodds.com)
+   (free, no CC), then export `SPORTSGAMEODDS_KEY=...`. Pinnacle is **not**
+   included in the free tier; validate the adapter against your live key.
+
+Comparison is **side-aligned**: sharp over is compared to fantasy Higher/More,
+sharp under to Lower/Less. If the sharp book disagrees with the fantasy favorite
+by ≥2pp, the pick flips to the sharp-favored side. Soft fantasy prices (sharp
+same-side true prob higher than fantasy) rise to the top of Edge Board.
 
 ## Entry-type cheat sheet
 
@@ -242,33 +274,21 @@ the variance profile you want from the same leg pool.
 
 ```
 ud_edge/
-├── __init__.py              # loads .env
-├── __main__.py              # CLI: --self-test | --dry-run | --once | --snapshot | --stale-report
-├── models.py                # Pydantic: Player, Appearance, Game, Leg, RankedLeg, FlexEntryType
-├── no_vig.py                # Pure math: decimal odds → true_prob (the +EV calc)
-├── flex_math.py             # Payout tables + per-entry EV (3-power, 4-flex, 5-flex, 6-flex)
-├── ud_client.py             # /beta/v5/over_under_lines fetcher + parser (line value from N+/N- threshold)
-├── apisports_client.py      # apisports.io cross-ref (football fixtures today, predictions)
-├── injury_client.py         # ESPN public injury feed (NBA/NFL/MLB/NHL/WNBA/CFB/EPL/MLS/WC)
-├── sharp_books_client.py    # Sharp-book cross-ref (manual CSV + SportsGameOdds API)
-├── matcher.py               # rank_legs() + build_lineups() (multi-entry partitioner)
-├── results_tracker.py        # log_picks + settle_pick + calibration_stats (per-pick tracking)
-├── stale_pricing.py         # Phase 1: SnapshotStore, movement detector, stale opportunity detector
-├── pp_clipboard.py          # PP/Sleeper clipboard + CSV adapter for the second-source feed
-└── deliver.py              # build_report() + build_multi_report() (per-entry Markdown sections)
-tests/
-├── test_no_vig.py          # 64 math + injury + sharp-book + lineup + calibration assertions
-├── test_stale_pricing.py   # snapshot + movement + stale-opportunity + migration + CLI assertions
-└── test_second_source.py   # capture_from_observations + CSV + CLI second-source tests
-data/
-├── ud_lines_cache.json      # 10-min disk cache of live UD response
-├── apisports_cache/         # per-endpoint disk cache (TTL-aware)
-├── injury_cache/            # per-league ESPN injury cache (30-min TTL)
-└── sharp_lines.csv          # user-maintained sharp-book lines (optional, manual cross-ref source)
-reports/
-└── YYYY-MM-DD_6flex.md      # saved pick reports
-docs/
-└── METHODOLOGY.md           # math derivation + assumptions + free-plan caveats
+├── __main__.py              # CLI: --self-test | --once | --snapshot | --serve
+├── models.py                # Pydantic: Leg, RankedLeg, …
+├── no_vig.py                # Decimal/American odds → true_prob
+├── flex_math.py             # Payout tables + per-entry EV
+├── ud_client.py             # Underdog live board
+├── sharp_books_client.py    # Manual CSV + Odds API + SportsGameOdds
+├── compare.py               # Fantasy-vs-sharp pipeline (dashboard feed)
+├── copy_format.py           # PrizePicks / Sleeper / Underdog paste lines
+├── matcher.py               # rank_legs() + side-aligned sharp compare
+├── stale_pricing.py         # Snapshot DB + stale opportunity detector
+├── pp_clipboard.py          # CSV / clipboard second-source adapter
+├── deliver.py               # Markdown reports
+└── dashboard/               # White Edge Board frontend
+    ├── app.py               # FastAPI: /api/opportunities, /api/export/{platform}
+    └── static/              # index.html + styles.css + app.js
 ```
 
 ## Data sources
@@ -286,15 +306,10 @@ from `/beta/v5/over_under_lines`. ~6,700 lines today across 17 sports. **Free, u
 
 - **Manual CSV source** (`data/sharp_lines.csv`) — works today, no signup.
   Format: `player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker`.
-  ~5 min/day to update.
-- **SportsGameOdds free tier** (auto source) — sign up at [sportsgameodds.com](https://sportsgameodds.com),
-  export `SPORTSGAMEODDS_KEY=...`. Advertised free-tier coverage includes books such as
-  FanDuel, DraftKings, BetMGM, Caesars, and ESPN BET; Pinnacle is not included.
-  Validate the adapter against your live key before relying on its parsed props.
-- Mispricings where the sharp book's true prob differs from UD's by ≥2pp
-  are flagged in the report (Δ column, bolded when |Δ| ≥ 2pp).
-- Legs where the sharp book gives HIGHER confidence than UD are boosted
-  to the top of the ranking.
+- **The Odds API** (`ODDS_API_KEY`) — US books player props (DK/FD/BetMGM, …).
+- **SportsGameOdds free tier** (`SPORTSGAMEODDS_KEY`) — validate adapter vs live key.
+- Comparison is **side-aligned** (sharp over ↔ fantasy Higher; sharp under ↔ Lower).
+- Soft fantasy lines (sharp same-side true prob higher) are boosted on Edge Board.
 
 **Secondary cross-reference:** [apisports.io](https://apisports.io) (free tier)
 - 100 req/day budget — cache aggressively

@@ -14,22 +14,21 @@ from ud_edge.results_tracker import (
 
 # ── american_to_implied ────────────────────────────────────────────────────
 class TestAmericanToImplied:
-    def test_minus_110_is_47_62_pct(self):
-        # -110 = 100/(100+110) = 0.47619
-        assert abs(american_to_implied(-110) - 0.47619) < 0.001
+    def test_minus_110_is_52_38_pct(self):
+        # Favorite: -110 = 110/(110+100) = 0.52381
+        assert abs(american_to_implied(-110) - 0.52381) < 0.001
 
     def test_plus_110_is_47_62_pct(self):
-        # +110 = 110/(110+100) = 0.52381? No wait: +110 = 110/210 = 0.52381
-        # But that means at -110/+110, the favorite is UNDER (-110) at 47.62%.
-        assert abs(american_to_implied(110) - 0.52381) < 0.001
+        # Underdog: +110 = 100/(110+100) = 0.47619
+        assert abs(american_to_implied(110) - 0.47619) < 0.001
 
-    def test_minus_200_is_33_33_pct(self):
-        # -200 = 100/(100+200) = 0.3333
-        assert abs(american_to_implied(-200) - 0.33333) < 0.001
+    def test_minus_200_is_66_67_pct(self):
+        # Favorite: -200 = 200/(200+100) = 0.66667
+        assert abs(american_to_implied(-200) - 0.66667) < 0.001
 
-    def test_plus_200_is_66_67_pct(self):
-        # +200 = 200/300 = 0.66667
-        assert abs(american_to_implied(200) - 0.66667) < 0.001
+    def test_plus_200_is_33_33_pct(self):
+        # Underdog: +200 = 100/(200+100) = 0.33333
+        assert abs(american_to_implied(200) - 0.33333) < 0.001
 
     def test_zero_raises(self):
         with pytest.raises(ValueError):
