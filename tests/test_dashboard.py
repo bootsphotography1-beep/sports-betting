@@ -73,6 +73,30 @@ class TestCopyFormat:
         d = opportunities_to_dict(_ranked())
         assert set(d["copy"]) >= {"prizepicks", "sleeper", "underdog", "generic"}
         assert d["sport_id"] == "NBA"
+        assert "reason" in d
+        assert d["reason"]["headline"]
+        assert d["reason"]["bullets"]
+        assert d["reason"]["math"]
+
+
+class TestExplainPick:
+    def test_explains_no_vig_without_sharp(self):
+        from ud_edge.copy_format import explain_pick
+        reason = explain_pick(_ranked(), break_even=0.524)
+        assert "No-vig" in reason["headline"] or "edge" in reason["headline"].lower()
+        assert any("vig" in b.lower() for b in reason["bullets"])
+        assert any("edge" in b.lower() for b in reason["bullets"])
+
+    def test_explains_mispricing_when_sharp_present(self):
+        from ud_edge.copy_format import explain_pick
+        r = _ranked()
+        r.sharp_true_prob = 0.62
+        r.sharp_book = "Pinnacle"
+        r.mispricing_edge_pp = 3.0
+        reason = explain_pick(r, break_even=0.524)
+        assert "Soft fantasy" in reason["headline"] or "Pinnacle" in reason["headline"]
+        assert any("Mispricing" in b or "soft" in b.lower() for b in reason["bullets"])
+        assert any("mispricing" in m.lower() for m in reason["math"])
 
 
 class TestSharpCanon:

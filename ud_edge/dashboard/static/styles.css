@@ -257,6 +257,24 @@ body {
   font-weight: 700;
 }
 
+.method {
+  margin: 0 0 1.75rem;
+  padding: 1rem 0 0.25rem;
+  animation: rise 0.9s 0.14s ease-out both;
+}
+
+.method-steps {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
+.method-steps li {
+  margin: 0.35rem 0;
+}
+
 .sport-panels {
   display: grid;
   gap: 2rem;
@@ -370,6 +388,80 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
+}
+
+.reason-cell {
+  max-width: 22rem;
+}
+
+.reason-headline {
+  margin: 0 0 0.25rem;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: var(--accent-deep);
+}
+
+.reason-summary {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.reason-toggle {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.reason-details {
+  margin-top: 0.45rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--line);
+}
+
+.reason-details[hidden] {
+  display: none !important;
+}
+
+.reason-details ul,
+.reason-details ol {
+  margin: 0.25rem 0 0.5rem;
+  padding-left: 1.1rem;
+}
+
+.reason-details li {
+  margin: 0.25rem 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--ink);
+}
+
+.reason-math {
+  margin: 0.35rem 0 0;
+  padding: 0.55rem 0.65rem;
+  background: rgba(228, 243, 239, 0.55);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: var(--accent-deep);
+  white-space: pre-wrap;
+}
+
+.why-shown {
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-style: italic;
 }
 
 .section-head {

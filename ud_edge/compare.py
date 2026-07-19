@@ -256,7 +256,7 @@ def compare_fantasy_vs_sharp(
                 1 for r in sport_legs
                 if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
             ),
-            "opportunities": [opportunities_to_dict(r) for r in sport_legs],
+            "opportunities": [opportunities_to_dict(r, break_even=entry.break_even) for r in sport_legs],
             "copy": {
                 "prizepicks": format_block(sport_legs, "prizepicks", sport=sport),
                 "sleeper": format_block(sport_legs, "sleeper", sport=sport),
@@ -274,7 +274,7 @@ def compare_fantasy_vs_sharp(
             "avg_true_prob": round(
                 sum(r.picked_true_prob for r in lineup) / len(lineup), 4
             ),
-            "opportunities": [opportunities_to_dict(r) for r in lineup],
+            "opportunities": [opportunities_to_dict(r, break_even=entry.break_even) for r in lineup],
             "copy": {
                 "prizepicks": format_block(lineup, "prizepicks", include_header=True),
                 "sleeper": format_block(lineup, "sleeper", include_header=True),
@@ -303,11 +303,23 @@ def compare_fantasy_vs_sharp(
         "sharp_meta": sharp_meta,
         "sports": sports_payload,
         "lineups": lineup_payload,
-        "flat": [opportunities_to_dict(r) for r in ranked],
+        "flat": [opportunities_to_dict(r, break_even=entry.break_even) for r in ranked],
         "copy_all": {
             "prizepicks": format_block(ranked, "prizepicks"),
             "sleeper": format_block(ranked, "sleeper"),
             "underdog": format_block(ranked, "underdog"),
             "generic": format_block(ranked, "generic"),
+        },
+        "methodology": {
+            "title": "How Edge Board picks props",
+            "steps": [
+                "Pull fantasy boards (Underdog live + PropLine PrizePicks/Sleeper when keyed).",
+                "Pull sharp sportsbook props (PropLine Pinnacle/DK/FD preferred).",
+                "Strip vig from two-sided prices to recover true Over/Under probabilities.",
+                "Pick the side with edge vs the entry break-even; boost soft fantasy lines where sharp same-side prob is higher.",
+                "Group by sport and build disjoint lineups you can copy into apps.",
+            ],
+            "break_even": entry.break_even,
+            "entry_type": entry_type,
         },
     }

@@ -129,9 +129,135 @@ def format_entry_card(
     return "\n".join(lines)
 
 
-def opportunities_to_dict(r: RankedLeg) -> dict:
+def explain_pick(r: RankedLeg, break_even: float = 0.524) -> dict:
+    """Build plain-English reasoning for why this pick is on the board.
+
+    Returns a structured explanation the dashboard can render:
+      headline, summary, bullets, math
+    """
+    leg = r.leg
+    side = _side_word(r.picked_side, "generic")
+    other_side = "Under" if side == "Over" else "Over"
+    stat = _stat_label(leg.stat_name)
+    line = f"{leg.line_value:g}"
+    ud_pct = r.picked_true_prob * 100
+    edge = r.picked_edge_pp
+    overround_pct = (r.overround - 1.0) * 100
+
+    bullets: list[str] = []
+    math_bits: list[str] = []
+
+    # Core no-vig story
+    bullets.append(
+        f"Fantasy two-way price implies {ud_pct:.1f}% true chance on "
+        f"{side} {line} {stat} after stripping {overround_pct:.1f}% book vig."
+    )
+    math_bits.append(
+        f"no-vig: Higher {r.higher_true_prob*100:.1f}% / Lower {r.lower_true_prob*100:.1f}% "
+        f"(overround {r.overround:.3f})"
+    )
+
+    # Why this side
+    fav = "Higher" if r.higher_true_prob >= r.lower_true_prob else "Lower"
+    if (r.picked_side == "higher" and fav == "Higher") or (
+        r.picked_side == "lower" and fav == "Lower"
+    ):
+        bullets.append(
+            f"Picked {side} because it is the favorite side after vig removal "
+            f"({ud_pct:.1f}% vs {other_side} "
+            f"{(r.lower_true_prob if r.picked_side == 'higher' else r.higher_true_prob)*100:.1f}%)."
+        )
+    else:
+        bullets.append(
+            f"Picked {side} because the sharp book disagreed with fantasy's favorite "
+            f"and flipped the side toward the sharper price."
+        )
+
+    # Edge vs break-even
+    if edge >= 0:
+        bullets.append(
+            f"Edge vs entry break-even ({break_even*100:.1f}%): "
+            f"+{edge:.1f} percentage points — clears the play threshold."
+        )
+    else:
+        bullets.append(
+            f"Edge vs entry break-even ({break_even*100:.1f}%): "
+            f"{edge:.1f}pp (kept because sharp mispricing still supports it)."
+        )
+    math_bits.append(f"edge = true_prob − break_even → {ud_pct/100:.4f} − {break_even:.4f} = {edge/100:.4f} ({edge:+.1f}pp)")
+
+    # Sharp cross-ref
+    if r.sharp_true_prob is not None and r.mispricing_edge_pp is not None:
+        sharp_pct = r.sharp_true_prob * 100
+        delta = r.mispricing_edge_pp
+        book = r.sharp_book or "sharp book"
+        if delta >= 2.0:
+            bullets.append(
+                f"Mispricing vs {book}: sharp same-side true prob is {sharp_pct:.1f}% "
+                f"({delta:+.1f}pp above fantasy). Fantasy is soft on this side — "
+                f"that is the main reason this pick ranks high."
+            )
+            headline = f"Soft fantasy line vs {book} (+{delta:.1f}pp)"
+        elif delta <= -2.0:
+            bullets.append(
+                f"Caution vs {book}: sharp same-side true prob is only {sharp_pct:.1f}% "
+                f"({delta:+.1f}pp vs fantasy). Fantasy looks richer than the sharp book."
+            )
+            headline = f"Fantasy richer than {book} ({delta:.1f}pp)"
+        else:
+            bullets.append(
+                f"Sharp check ({book}): {sharp_pct:.1f}% on the same side "
+                f"({delta:+.1f}pp vs fantasy) — books roughly agree."
+            )
+            headline = f"Fantasy + sharp agree on {side}"
+        math_bits.append(
+            f"mispricing = sharp_same_side − fantasy_same_side → "
+            f"{sharp_pct/100:.4f} − {ud_pct/100:.4f} = {delta/100:.4f} ({delta:+.1f}pp)"
+        )
+    else:
+        bullets.append(
+            "No matching sharp-book line found for this player/stat/line — "
+            "ranked from fantasy no-vig pricing alone."
+        )
+        headline = f"No-vig edge on {side} {line} {stat}"
+
+    # Odds snapshot
+    math_bits.append(
+        f"fantasy decimals: Higher {leg.higher_decimal:.3f} / Lower {leg.lower_decimal:.3f}"
+    )
+
+    summary = (
+        f"{leg.player_name}: {side} {line} {stat} at {ud_pct:.1f}% true "
+        f"({edge:+.1f}pp edge)"
+    )
+    if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0:
+        summary += (
+            f"; sharp ({r.sharp_book or 'book'}) says "
+            f"{(r.sharp_true_prob or 0)*100:.1f}% (+{r.mispricing_edge_pp:.1f}pp soft)."
+        )
+
+    return {
+        "headline": headline,
+        "summary": summary,
+        "bullets": bullets,
+        "math": math_bits,
+        "why_shown": (
+            "Shown because it cleared min true-prob and min edge filters, "
+            "and ranked among the strongest available edges"
+            + (
+                " with a sharp-vs-fantasy mispricing boost"
+                if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
+                else ""
+            )
+            + "."
+        ),
+    }
+
+
+def opportunities_to_dict(r: RankedLeg, break_even: float = 0.524) -> dict:
     """Serialize a RankedLeg for the dashboard JSON API."""
     leg = r.leg
+    reason = explain_pick(r, break_even=break_even)
     return {
         "player_name": leg.player_name,
         "sport_id": leg.sport_id or "UNK",
@@ -147,6 +273,9 @@ def opportunities_to_dict(r: RankedLeg) -> dict:
         "side_underdog": _side_word(r.picked_side, "underdog"),
         "ud_true_prob": round(r.picked_true_prob, 4),
         "ud_edge_pp": round(r.picked_edge_pp, 2),
+        "higher_true_prob": round(r.higher_true_prob, 4),
+        "lower_true_prob": round(r.lower_true_prob, 4),
+        "overround": round(r.overround, 4),
         "sharp_true_prob": round(r.sharp_true_prob, 4) if r.sharp_true_prob is not None else None,
         "sharp_book": r.sharp_book,
         "mispricing_edge_pp": (
@@ -155,6 +284,7 @@ def opportunities_to_dict(r: RankedLeg) -> dict:
         "is_mispriced": bool(
             r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
         ),
+        "reason": reason,
         "copy": {
             "prizepicks": format_one_line(r, "prizepicks"),
             "sleeper": format_one_line(r, "sleeper"),

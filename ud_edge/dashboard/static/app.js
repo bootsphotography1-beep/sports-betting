@@ -13,6 +13,10 @@
     metaMis: document.getElementById("meta-mis"),
     metaSharp: document.getElementById("meta-sharp"),
     metaSources: document.getElementById("meta-sources"),
+    method: document.getElementById("method"),
+    methodTitle: document.getElementById("method-title"),
+    methodSub: document.getElementById("method-sub"),
+    methodSteps: document.getElementById("method-steps"),
     lineups: document.getElementById("lineups"),
     lineupList: document.getElementById("lineup-list"),
     toast: document.getElementById("toast"),
@@ -94,9 +98,26 @@
       ? `Fantasy ${fantasy} · Sharp ${sources}`
       : `Sharp ${sources}`;
 
+    renderMethod(data.methodology);
     renderTabs(data.sports || []);
     renderPanels(data.sports || []);
     renderLineups(data.lineups || []);
+  }
+
+  function renderMethod(method) {
+    if (!method || !els.method) return;
+    els.method.hidden = false;
+    if (method.title) els.methodTitle.textContent = method.title;
+    const be = method.break_even != null ? (method.break_even * 100).toFixed(1) : null;
+    els.methodSub.textContent = be
+      ? `Entry ${method.entry_type || ""} · break-even ${be}% per leg. Expand any pick for the math.`
+      : "Each prop below includes the math edge and why it made the board.";
+    els.methodSteps.innerHTML = "";
+    for (const step of method.steps || []) {
+      const li = document.createElement("li");
+      li.textContent = step;
+      els.methodSteps.appendChild(li);
+    }
   }
 
   function renderTabs(sports) {
@@ -175,6 +196,7 @@
             <th>UD%</th>
             <th>Sharp%</th>
             <th>Δpp</th>
+            <th>Why this pick</th>
             <th>Copy</th>
           </tr>
         </thead>
@@ -191,6 +213,8 @@
           ? `${opp.mispricing_edge_pp >= 0 ? "+" : ""}${opp.mispricing_edge_pp.toFixed(1)}`
           : "—";
         const book = opp.sharp_book ? `<span class="badge${mis ? " hot" : ""}">${opp.sharp_book}</span>` : "";
+        const reason = opp.reason || {};
+        const reasonId = `reason-${block.sport}-${Math.random().toString(36).slice(2, 9)}`;
 
         tr.innerHTML = `
           <td data-label="Player">
@@ -204,8 +228,62 @@
           <td data-label="UD%">${(opp.ud_true_prob * 100).toFixed(1)}%</td>
           <td data-label="Sharp%">${sharpPct}</td>
           <td data-label="Δpp">${delta}</td>
+          <td data-label="Why" class="reason-cell"></td>
           <td data-label="Copy"></td>
         `;
+
+        const reasonTd = tr.querySelector(".reason-cell");
+        const headline = document.createElement("p");
+        headline.className = "reason-headline";
+        headline.textContent = reason.headline || "No-vig edge";
+        reasonTd.appendChild(headline);
+
+        const summary = document.createElement("p");
+        summary.className = "reason-summary";
+        summary.textContent = reason.summary || "";
+        reasonTd.appendChild(summary);
+
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "reason-toggle";
+        toggle.textContent = "Show math & reasoning";
+        toggle.setAttribute("aria-expanded", "false");
+        toggle.setAttribute("aria-controls", reasonId);
+
+        const details = document.createElement("div");
+        details.className = "reason-details";
+        details.id = reasonId;
+        details.hidden = true;
+
+        const why = document.createElement("p");
+        why.className = "why-shown";
+        why.textContent = reason.why_shown || "";
+        details.appendChild(why);
+
+        const ul = document.createElement("ul");
+        for (const b of reason.bullets || []) {
+          const li = document.createElement("li");
+          li.textContent = b;
+          ul.appendChild(li);
+        }
+        details.appendChild(ul);
+
+        if (reason.math && reason.math.length) {
+          const math = document.createElement("pre");
+          math.className = "reason-math";
+          math.textContent = reason.math.join("\n");
+          details.appendChild(math);
+        }
+
+        toggle.addEventListener("click", () => {
+          const open = details.hidden;
+          details.hidden = !open;
+          toggle.setAttribute("aria-expanded", String(open));
+          toggle.textContent = open ? "Hide math & reasoning" : "Show math & reasoning";
+        });
+
+        reasonTd.appendChild(toggle);
+        reasonTd.appendChild(details);
 
         const actions = document.createElement("div");
         actions.className = "row-actions";
@@ -269,7 +347,15 @@
       const ol = document.createElement("ol");
       for (const opp of lu.opportunities || []) {
         const li = document.createElement("li");
-        li.textContent = `${opp.sport_id} · ${opp.copy?.underdog || opp.player_name}`;
+        const main = document.createElement("div");
+        main.textContent = `${opp.sport_id} · ${opp.copy?.underdog || opp.player_name}`;
+        li.appendChild(main);
+        if (opp.reason?.headline) {
+          const why = document.createElement("div");
+          why.className = "reason-summary";
+          why.textContent = opp.reason.headline;
+          li.appendChild(why);
+        }
         ol.appendChild(li);
       }
       wrap.appendChild(ol);
