@@ -68,6 +68,13 @@ Note: many DK/FD batter props are milestones (`1+`, `2+`), mapped to
 Over `(N−0.5)` with a synthetic Under so overround = 1.0 — not true
 two-sided sharp prices like Pinnacle.
 
+### Multi-DFS misprice scan (`--misprices`)
+
+Compares **Underdog / Sleeper / PrizePicks / Dabble** against sharp consensus
+(Pinnacle → DK → FD → BetMGM) via PropLine. Surfaces line gaps and same-line
+probability edges. Flipped/outlier sharp feeds are dropped against a
+Pinnacle/DK anchor.
+
 ## Entry-type math
 
 | Entry | n | Payouts | Per-leg break-even | EV at 55% / 60% |

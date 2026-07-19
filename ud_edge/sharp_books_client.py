@@ -270,7 +270,7 @@ class PropLineClient:
         "player_anytime_td": "rec_tds",
     }
 
-    # Prefer sharp / two-sided books; skip PrizePicks ±100 fluff for no-vig.
+    # Prefer sharp / two-sided books for the UD pick pipeline index.
     BOOK_PRIORITY = (
         "pinnacle",
         "draftkings",
@@ -278,8 +278,23 @@ class PropLineClient:
         "betmgm",
         "betrivers",
         "bovada",
-        "sleeper",  # often has two-sided American prices
-        # underdog omitted — we already fetch UD live directly
+        "sleeper",
+        # underdog omitted — live UD API is the primary board for --once
+    )
+
+    SHARP_BOOKS = (
+        "pinnacle",
+        "draftkings",
+        "fanduel",
+        "betmgm",
+        "betrivers",
+        "bovada",
+    )
+    DFS_BOOKS = (
+        "underdog",
+        "sleeper",
+        "prizepicks",
+        "dabble",
     )
 
     DEFAULT_MARKETS_BY_SPORT = {
@@ -332,17 +347,18 @@ class PropLineClient:
             cache_file.write_text(json.dumps(data))
         return data
 
-    def fetch_player_props(
+    def fetch_props_by_books(
         self,
         sport_id: str,
-        bookmakers: Optional[list[str]] = None,
+        bookmakers: list[str],
+        *,
+        collapse: bool = True,
     ) -> list[dict]:
-        """Fetch two-sided player props for a UD sport_id.
+        """Fetch two-sided player props for specific books.
 
-        Returns flat list of:
-          {player, stat, line, over_decimal, under_decimal, bookmaker, sport}
-        Prefer higher-priority books when the same player|stat|line appears
-        on multiple books (Pinnacle first).
+        When collapse=True (default), keep the highest-priority book per
+        player|stat|line. When False, return every book separately (needed
+        for DFS-vs-sharp misprice scanning).
         """
         sport_key = self.SPORT_MAP.get(sport_id)
         if not sport_key:
@@ -350,37 +366,41 @@ class PropLineClient:
         markets = self.DEFAULT_MARKETS_BY_SPORT.get(sport_key)
         if not markets:
             return []
+        if not bookmakers:
+            return []
 
-        books = bookmakers or list(self.BOOK_PRIORITY)
-        # One bulk call per sport — stays well under 1,000 req/day free quota.
+        # Cache key must distinguish sharp vs DFS batches
+        tag = "_".join(bookmakers[:4])
         data = self._get(
             f"/sports/{sport_key}/odds",
             {
                 "markets": markets,
-                "bookmakers": ",".join(books),
+                "bookmakers": ",".join(bookmakers),
             },
-            cache_key=f"odds_{sport_key}_{'_'.join(books[:4])}",
+            cache_key=f"odds_{sport_key}_{tag}",
         )
         if not isinstance(data, list):
             return []
 
-        # book_priority rank for conflict resolution
-        book_rank = {b: i for i, b in enumerate(self.BOOK_PRIORITY)}
+        book_rank = {b: i for i, b in enumerate(self.BOOK_PRIORITY + self.DFS_BOOKS)}
+        # Any unknown book still accepted when explicitly requested
+        for i, b in enumerate(bookmakers):
+            book_rank.setdefault(b, 100 + i)
+
         best: dict[str, tuple[int, dict]] = {}
+        all_props: list[dict] = []
 
         for event in data:
             for book in event.get("bookmakers") or []:
                 book_key = (book.get("key") or "").lower()
-                if book_key not in book_rank:
+                if book_key not in book_rank and book_key not in bookmakers:
                     continue
-                # Group Over/Under by (market, player, point)
                 pairs: dict[tuple, dict] = {}
                 for market in book.get("markets") or []:
                     mkey = market.get("key") or ""
                     ud_stat = self.MARKET_TO_UD_STAT.get(mkey)
                     if not ud_stat:
                         continue
-                    # PrizePicks goblin/demon are alt lines — skip non-standard
                     for outcome in market.get("outcomes") or []:
                         dfs_type = outcome.get("dfs_odds_type")
                         if dfs_type and dfs_type != "standard":
@@ -388,7 +408,9 @@ class PropLineClient:
                         side = (outcome.get("name") or "").strip()
                         if side not in ("Over", "Under"):
                             continue
-                        player = (outcome.get("description") or "").strip()
+                        raw_player = (outcome.get("description") or "").strip()
+                        # "Anthony Volpe (NYY)" → "Anthony Volpe"
+                        player = re.sub(r"\s*\([^)]*\)\s*$", "", raw_player).strip()
                         point = outcome.get("point")
                         if not player or point is None:
                             continue
@@ -411,8 +433,9 @@ class PropLineClient:
                 for bucket in pairs.values():
                     if "over_decimal" not in bucket or "under_decimal" not in bucket:
                         continue
-                    # Skip useless even-money DFS shells (PP ±100 / 2.0/2.0)
-                    if (
+                    # Keep PrizePicks ±100 rows when collapse=False (line shopping);
+                    # drop them when collapsing into a sharp index.
+                    if collapse and (
                         abs(bucket["over_decimal"] - 2.0) < 1e-9
                         and abs(bucket["under_decimal"] - 2.0) < 1e-9
                     ):
@@ -426,16 +449,30 @@ class PropLineClient:
                         "bookmaker": book_key,
                         "sport": sport_id,
                     }
+                    if not collapse:
+                        all_props.append(prop)
+                        continue
                     idx_key = (
                         f"{_normalize_name(prop['player'])}|{prop['stat']}|"
                         f"{prop['line']}"
                     )
-                    rank = book_rank[book_key]
+                    rank = book_rank.get(book_key, 99)
                     prev = best.get(idx_key)
                     if prev is None or rank < prev[0]:
                         best[idx_key] = (rank, prop)
 
-        return [v for _, v in best.values()]
+        if collapse:
+            return [v for _, v in best.values()]
+        return all_props
+
+    def fetch_player_props(
+        self,
+        sport_id: str,
+        bookmakers: Optional[list[str]] = None,
+    ) -> list[dict]:
+        """Fetch two-sided player props for a UD sport_id (collapsed to best book)."""
+        books = bookmakers or list(self.BOOK_PRIORITY)
+        return self.fetch_props_by_books(sport_id, books, collapse=True)
 
 
 _SCRAPER_BOOK_PRIORITY = ["draftkings", "fanduel", "bovada"]

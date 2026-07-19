@@ -346,6 +346,59 @@ def run_once(
     return 0
 
 
+def run_misprices(
+    sports: list[str],
+    cache_path: Path,
+    save_path: Path | None,
+    min_line_gap: float,
+    min_prob_edge_pp: float,
+    top_n: int,
+    use_scrapers: bool,
+) -> int:
+    """Scan all DFS boards vs sharp books and print soft edges."""
+    import os
+    from ud_edge.misprice import (
+        fetch_dfs_and_sharp_props,
+        find_misprices,
+        format_misprice_report,
+    )
+
+    propline_key = os.environ.get("PROPLINE_API_KEY", "")
+    if not propline_key:
+        print("[misprice] PROPLINE_API_KEY required to pull Underdog/Sleeper/"
+              "PrizePicks/Dabble + sharp books in one pass.")
+        return 1
+
+    sharp_cache = cache_path.parent / "sharp_cache"
+    print(f"[misprice] fetching DFS + sharp props for {sports}…")
+    dfs_props, sharp_props = fetch_dfs_and_sharp_props(
+        propline_key=propline_key,
+        sports=sports,
+        cache_path=sharp_cache,
+        include_scrapers=use_scrapers,
+    )
+    from collections import Counter
+    print(f"[misprice] DFS props={len(dfs_props)} by book="
+          f"{dict(Counter(p['bookmaker'] for p in dfs_props))}")
+    print(f"[misprice] sharp props={len(sharp_props)} by book="
+          f"{dict(Counter(p['bookmaker'] for p in sharp_props))}")
+
+    hits = find_misprices(
+        dfs_props,
+        sharp_props,
+        min_line_gap=min_line_gap,
+        min_prob_edge_pp=min_prob_edge_pp,
+    )
+    report = format_misprice_report(hits, top_n=top_n)
+    print()
+    print(report)
+    if save_path:
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        save_path.write_text(report)
+        print(f"\n[misprice] saved → {save_path}")
+    return 0
+
+
 # ── CLI plumbing ───────────────────────────────────────────────────────────
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
@@ -358,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Run pipeline with synthetic data, no network")
     parser.add_argument("--once", action="store_true",
                         help="Fetch live UD slate and print picks")
+    parser.add_argument("--misprices", action="store_true",
+                        help="Scan Underdog/Sleeper/PrizePicks/Dabble vs sharp books "
+                             "and print all soft edges (uses PropLine when keyed).")
     parser.add_argument("--sport", type=str, default=None,
                         help="Comma-separated sport filter (NBA,MLB,NFL,...)")
     parser.add_argument("--entry", type=str, default="6-flex",
@@ -450,6 +506,21 @@ def main(argv: list[str] | None = None) -> int:
         return self_test()
     if args.dry_run:
         return dry_run()
+    if args.misprices:
+        sports = ["MLB", "WNBA", "NFL", "NBA", "NHL"]
+        if args.sport:
+            sports = [s.strip().upper() for s in args.sport.split(",")]
+        top_n = args.top if args.top is not None else 50
+        return run_misprices(
+            sports=sports,
+            cache_path=cache_path,
+            save_path=save_path,
+            min_line_gap=args.min_line_gap,
+            min_prob_edge_pp=args.min_prob_gap_pp,
+            top_n=top_n,
+            # PropLine already has Pinnacle/DK/FD; scrapers are milestone-noisy
+            use_scrapers=False,
+        )
     if args.once:
         sport_filter = None
         if args.sport:
