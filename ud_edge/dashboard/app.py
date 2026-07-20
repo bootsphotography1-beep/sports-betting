@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -301,6 +302,19 @@ def lineup_suggestions(
     entry: str = Query("6-flex"),
     n_entries: int = Query(4, ge=1, le=8),
     prefer_6man: bool = Query(True),
+    # Audit residual v3 (remediation v3): forward line_tolerance so operators
+    # can see lineups built from a tolerance they chose. The lineups endpoint
+    # reads from _RANKED_CACHE populated by /api/opportunities, so we verify
+    # the requested tolerance matches what was used in the cache. If not, we
+    # 409 with instructions to refresh opportunities first (rather than
+    # silently returning lineups built from a different tolerance).
+    line_tolerance: Optional[float] = Query(
+        None,
+        ge=0.0,
+        le=5.0,
+        description="Must match the tolerance used in /api/opportunities. "
+                    "If omitted, we use whatever the latest cache used.",
+    ),
 ):
     """Return correlation-aware suggested lineups.
 
@@ -310,7 +324,41 @@ def lineup_suggestions(
 
     Returns both the lineups and correlation warnings (avg_abs_rho,
     fighting_pairs, scenario probabilities).
+
+    Audit (remediation v3): lineups consume `_RANKED_CACHE` from
+    /api/opportunities. If line_tolerance is specified here but differs from
+    the value used to populate the cache, return 409 to avoid silently
+    returning mismatched data.
     """
+    # Cross-check line_tolerance against the cache key the opportunities run used.
+    if line_tolerance is not None:
+        cache_key = _CACHE.get("key", "")
+        # Cache key includes "line_tolerance=<value>" — extract it.
+        m = re.search(r"line_tolerance=([^|]+)", cache_key)
+        cached_lt: Optional[float] = None
+        if m:
+            try:
+                cached_lt = float(m.group(1))
+            except (TypeError, ValueError):
+                cached_lt = None
+        if cached_lt is not None and abs(cached_lt - line_tolerance) > 1e-9:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"line_tolerance={line_tolerance} requested but the "
+                        f"cached opportunities run used line_tolerance="
+                        f"{cached_lt}. Refresh /api/opportunities with the "
+                        f"desired tolerance first, then call /api/lineups."
+                    ),
+                    "cached_line_tolerance": cached_lt,
+                    "requested_line_tolerance": line_tolerance,
+                    "fix": (
+                        f"GET /api/opportunities?line_tolerance={line_tolerance}"
+                    ),
+                },
+                status_code=409,
+            )
+
     payload = _CACHE.get("payload")
     if not payload:
         return JSONResponse(
