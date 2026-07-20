@@ -268,14 +268,20 @@ def test_honest_status_md_exists():
     assert status_file.exists(), f"HONEST_STATUS.md not found at {status_file}"
 
 
-def test_honest_status_md_contains_wave_0():
-    """HONEST_STATUS.md must mention Wave 0 / research-only status."""
+def test_honest_status_md_mentions_research_and_current_wave():
+    """HONEST_STATUS.md must surface the current wave and the research-only safety case.
+
+    Wave 0+ all keep `is_research_mode: TRUE` because the calibration sample is
+    too small; the document must therefore reference both the active research
+    mode and the current wave number. The wave label evolves (Wave 0, Wave 1, …)
+    so assert the *family* of waves, not a literal value.
+    """
     from ud_edge import safety_gate
     root = Path(safety_gate.__file__).resolve().parent.parent
     status_file = root / "HONEST_STATUS.md"
     content = status_file.read_text()
-    assert "Wave 0" in content or "wave 0" in content.lower()
-    assert "research" in content.lower()
+    assert "research" in content.lower(), "Status doc must keep the research-only safety case"
+    assert "Wave " in content or "wave " in content.lower(), "Status doc must identify a current wave"
 
 
 # ── Wave 0 review-gap tests ────────────────────────────────────────────────────

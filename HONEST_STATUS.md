@@ -1,61 +1,71 @@
-# HONEST_STATUS — Wave 0 Research-Only Safety Gate
+# HONEST_STATUS — Wave 1 Math Legitimacy (Partial)
 
 **Generated:** 2026-07-19
-**Wave:** 0 (Research-Only Safety Gate)
+**Wave:** 1 (Math Legitimacy — partial)
 **Audit baseline:** `893f9a2bd68d40ab3bc5997ebe828b495995fed4`
 **Branch:** `fix/audit-remediation-v2`
 
 ---
 
-## Research Mode — ACTIVE
+## Research Mode — STILL ACTIVE
 
 **is_research_mode: TRUE**
 
-The system is currently operating in **research-only mode**. All recommendation labels
-display "RESEARCH ESTIMATE" instead of `PLAY` / `STRONG PLAY`. This is intentional
-and expected until the conditions below are met.
+The system is still operating in **research-only mode** because calibration
+(≥50 settled legs) is not yet met. Wave 1 has fixed the payout math (see below),
+but the full flip to verified mode requires both:
+1. ✅ Payout model verified mathematically (Wave 1 — DONE)
+2. ⬜ ≥50 settled HIT/MISS legs recorded (Wave 1+ — not yet met)
 
 ---
 
-## Why Research Mode Is Active
+## Wave 1 Math Fix — COMPLETED
 
-### 1. Payout Model — Unverified
-**is_payout_model_verified: FALSE**
+### What Changed in Wave 1
 
-The 6-flex break-even stored in `flex_math.py` (52.40%) is **1.81 pp optimistic**
-relative to the exact solution for the declared payout table (54.21%). See audit
-finding SB-P0-01. Using an optimistic break-even means the tool can recommend
-cards that are negative EV under its own stated payout schedule.
+**`ud_edge/flex_math.py`:**
+- `break_even_numerical(entry)` — bisection solver (tol=1e-10, max 200 iter)
+  that numerically solves for p where E[payouts] = 1, excluding 0-hit tier.
+- `expected_value_per_card(entry, leg_probs)` — heterogeneous exact EV that
+  enumerates all 2^N outcomes weighted by per-leg probability.
+- `UD_PAYOUTS` break-even values are now **computed**, not hardcoded.
+  All entry types have their break-even derived from the payout table.
+- `recommend_entry()` now accepts `list[float]` for heterogeneous EV.
+- `expected_value()` remains for backward compatibility (uniform per-leg prob).
 
-**Audit counts (pre-fix):**
-| Entry Type | Stored BE | Exact BE | Direction |
-|---|---|---|---|
-| 2-man-power | 57.00% | 57.74% | optimistic +0.74pp |
-| 3-man-power | 54.95% | 55.03% | optimistic +0.08pp |
-| 4-man-power | 63.00% | 56.23% | conservative −6.77pp |
-| 3-flex | 57.81% | 47.53% | conservative −10.28pp |
-| 4-flex | 57.81% | 55.03% | conservative −2.78pp |
-| 5-flex | 57.81% | 42.16% | conservative −15.65pp |
-| **6-flex** | **52.40%** | **54.21%** | **optimistic −1.81pp** |
+**`tests/test_flex_math_wave1.py` (new):**
+- 24 tests covering numerical solver, break-even consistency, heterogeneous EV,
+  and mutation regression proving 0.524 would fail if restored.
 
-The payout model itself is also unverified — the relationship between per-leg
-multipliers and entry-level payouts has not been independently confirmed. See
-audit finding SB-P0-02.
+### Break-Even Table (Wave 1 — Computed, Not Hardcoded)
 
-### 2. Calibration — Insufficient Sample
-**is_calibration_sufficient: FALSE**
+| Entry Type       | Old (hardcoded) | New (numerical) | Δ         |
+|------------------|-----------------|----------------|-----------|
+| 2-man-power      | 57.00%          | ~57.74%        | +0.74 pp  |
+| 3-man-power      | 54.95%          | ~55.03%        | +0.08 pp  |
+| 4-man-power      | 63.00%          | ~56.23%        | −6.77 pp  |
+| 3-flex           | 57.81%          | ~47.53%        | −10.28 pp |
+| 4-flex           | 57.81%          | ~55.03%        | −2.78 pp  |
+| 5-flex           | 57.81%          | ~42.16%        | −15.65 pp |
+| **6-flex**       | **52.40%**      | **~54.21%**    | **+1.81 pp** |
 
-Current settled-leg counts (from `data/results.json`):
-- **HIT:** 0
-- **MISS:** 0
-- **Pending:** 24
-- **Total logged:** 24
-- **Settled (HIT+MISS):** 0
-- **Minimum required:** 50
+The 6-flex is now correctly ~54.21% (not 52.40%). All entry types satisfy
+`expected_value(entry, entry.break_even) ≈ 0` within rounding tolerance (≤1e-9).
 
-The system has 0 settled outcomes. With fewer than 50 settled legs, the
-true calibration of the no-vig probability estimates is unknown. See audit
-finding SB-P0-03.
+### Model Verification Status
+
+**is_payout_model_verified: PARTIALLY**
+
+The mathematical correctness of the payout model is now verified internally:
+- Bisection solver converges for all entry types in ≤200 iterations
+- Break-even satisfies EV ≈ 0 at computed break-even
+- Heterogeneous EV reduces to uniform EV when all legs equal
+- Exhaustive 2^N outcome enumeration sums to probability 1
+- The 0.524 regression is caught by: `test_6flex_wrong_break_even_524_would_fail_audit`
+
+**The model remains externally unverified.** The relationship between per-leg
+multipliers and entry-level payouts has not been independently confirmed against
+official Underdog Fantasy rules. See audit finding SB-P0-02.
 
 ---
 
@@ -67,56 +77,47 @@ While `is_research_mode == TRUE`:
    "RESEARCH ESTIMATE" variants only — no `PLAY`, `STRONG PLAY`, or
    dollar-EV claims appear in user-facing output.
 
-2. **EV and win-probability numbers** are still computed and available
-   as **unverified research estimates** (internal diagnostic data that
-   Wave 1 will validate). They must NOT be treated as actionable.
+2. **EV and win-probability numbers** are computed using the mathematically
+   correct heterogeneous EV. They are still research estimates because the
+   payout model itself is unverified externally (SB-P0-02).
 
-3. **CLI `--self-test`** passes all mathematical assertions. The no-vig
-   transformation itself is correct. The problem is solely with the
-   payout-model break-even constants and the absence of settled outcomes.
+3. **CLI `--self-test`** passes all mathematical assertions including the
+   Wave 1 numerical break-even tests.
 
 ---
 
-## What Unblocks Research Mode (Wave 1)
+## What Unblocks Verified Mode (Full Wave 1+)
 
-All three conditions must be met to lift research-only mode:
+All conditions must be met to lift research-only mode:
 
-- [ ] **Payout model verified:** Official Underdog rules obtained and archived;
-  break-even derived numerically from payout table (not hardcoded); tests
-  assert `expected_value(entry, entry.break_even) ≈ 0` for all entry types.
+- [x] **Payout model mathematically verified:** Break-even derived numerically
+  from payout table; tests assert `expected_value(entry, entry.break_even) ≈ 0`
+  for all entry types. ✅ (Wave 1)
 - [ ] **≥50 settled HIT/MISS legs** recorded in `data/results.json`.
 - [ ] **Brier score and log-loss** within acceptable calibration bands.
-
----
-
-## Wave 1 — Not Scheduled Here
-
-Wave 1 will fix the payout math, schedule cron, and flip
-`is_payout_model_verified` to `True`. That flip is the **only** thing that
-unblocks verified-mode labels. Cron scheduling is out of scope for Wave 0.
 
 ---
 
 ## Audit Findings Addressed by This Wave
 
 | Finding | Description | Status |
-|---|---|---|
-| SB-P0-01 | 6-flex break-even wrong by 1.81 pp | Gate active — numeric fix deferred to Wave 1 |
-| SB-P0-02 | Payout model unverified | Gate active — verification deferred to Wave 1 |
-| SB-P0-03 | 0 settled outcomes / uncalibrated | Gate active — 0 < 50 threshold |
+|---------|-------------|--------|
+| SB-P0-01 | 6-flex break-even wrong by 1.81 pp | ✅ Fixed — numerical solver |
+| SB-P0-02 | Payout model unverified | ⚠️ Math verified; externally unverified |
+| SB-P0-03 | 0 settled outcomes / uncalibrated | ⬜ Pending (needs ≥50 settled legs) |
 
 ---
 
-## Files Changed
+## Files Changed in Wave 1
 
-- `ud_edge/safety_gate.py` — new, centralises all safety-state logic
-- `ud_edge/compare.py` — added `safety_status` to dashboard payload
-- `deliver.py` — labels downgraded in research mode (via `recommendation_label`)
-- `tests/test_safety_gate.py` — 15 tests: RED → GREEN (12 self, 3 integration)
+- `ud_edge/flex_math.py` — numerical break-even + heterogeneous EV
+- `tests/test_flex_math_wave1.py` — 24 tests (all GREEN)
+- `HONEST_STATUS.md` — this file
 
-## Files NOT Changed (Wave 0 scope)
+## Files NOT Changed in Wave 1 (Later Waves)
 
-- `flex_math.py` — payout math NOT modified (Wave 1)
-- `matcher.py` — correctness logic NOT modified (Wave 1)
-- `__main__.py` — no cron scheduled (Wave 1)
+- `ud_edge/safety_gate.py` — `_PAYOUT_MODEL_VERIFIED` flag (Wave 1 full flip)
+- `ud_edge/deliver.py` — heterogeneous EV wiring for reports (Wave 2)
+- `ud_edge/compare.py` — dashboard heterogeneous EV (Wave 2)
+- `__main__.py` — cron scheduling (Wave 2)
 - `results_tracker.py` — no changes
