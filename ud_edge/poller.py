@@ -156,6 +156,13 @@ def _run_poll_cycle(
     # returned (no JSON serialization round-trip, no field loss). The poller
     # used to rebuild RankedLeg from the flat dict list which silently dropped
     # sharp_book, match_id, fantasy_source, etc.
+    #
+    # Audit P1 #6 (remediation v3): forward line_tolerance (env-driven so
+    # operators can opt up to 1.0+ for soft lines without touching code).
+    # Default None means compare_fantasy_vs_sharp will use its module constant.
+    import os as _os
+    _line_tolerance_env = _os.environ.get("UD_LINE_TOLERANCE", "").strip()
+    _line_tolerance = float(_line_tolerance_env) if _line_tolerance_env else None
     try:
         result = compare_fantasy_vs_sharp(
             entry_type="6-flex",
@@ -168,6 +175,7 @@ def _run_poll_cycle(
             n_entries=4,
             force_fetch=True,
             return_ranked=True,
+            line_tolerance=_line_tolerance,
         )
     except Exception as e:
         print(f"[poll] compare_fantasy_vs_sharp error: {e}")

@@ -123,6 +123,11 @@ class RankedLeg(BaseModel):
     sharp_book: Optional[str] = None  # e.g. "Pinnacle", "DraftKings", "manual-csv"
     sharp_overround: Optional[float] = None
     mispricing_edge_pp: Optional[float] = None  # sharp_true_prob - ud_true_prob (positive = UD too low)
+    # Audit P1 #6 (remediation v3): distance between the fantasy line_value and
+    # the sharp line. 0.0 for an exact-key match; abs(fantasy - sharp) for a
+    # fuzzy match. Surface on the dashboard so operators see "fuzzy match at
+    # 1.5 line gap" instead of treating it like an exact match.
+    match_distance: Optional[float] = None
 
 
 class FlexEntryType(BaseModel):

@@ -318,8 +318,11 @@ def rank_legs(
         sharp_book: Optional[str] = None
         sharp_overround: Optional[float] = None
         mispricing_edge_pp: Optional[float] = None
+        # Audit P1 #6 (remediation v3): carry the fuzzy-match distance so the
+        # dashboard can show "matched within 1.5 line gap" instead of silently
+        # equating fuzzy matches with exact-key matches.
+        match_distance: Optional[float] = None
         quarantined = False  # True when sharp disagrees with fantasy by > -2pp
-
         if sharp_book_index and sharp_policy == "sharp_authoritative_quarantine":
             from ud_edge.sharp_books_client import find_sharp_match
             sharp_match = find_sharp_match(
@@ -341,8 +344,9 @@ def rank_legs(
                 )
                 sharp_book = sharp_match.bookmaker
                 sharp_overround = None  # already no-vigged in SharpMatch
-
-                # Mispricing = sharp_same_side - fantasy_same_side (percentage points)
+                # Audit P1 #6 (remediation v3): propagate the fuzzy-match gap
+                # onto RankedLeg so the dashboard can show it.
+                match_distance = sharp_match.match_distance
                 delta_pp = (sharp_true_prob - picked_prob) * 100
                 mispricing_edge_pp = delta_pp
 
@@ -389,6 +393,7 @@ def rank_legs(
                 sharp_book=sharp_book,
                 sharp_overround=sharp_overround,
                 mispricing_edge_pp=mispricing_edge_pp,
+                match_distance=match_distance,
             )
         )
 

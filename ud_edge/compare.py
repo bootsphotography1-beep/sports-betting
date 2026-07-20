@@ -161,12 +161,17 @@ def compare_fantasy_vs_sharp(
     n_entries: int = 4,
     force_fetch: bool = True,
     return_ranked: bool = False,
+    line_tolerance: Optional[float] = None,
 ):
     """Run the full comparison and return a dashboard-ready payload.
 
     When return_ranked=True, returns a tuple (payload, ranked_list) so the
     dashboard can hand the live RankedLeg objects to the lineup selector
     without losing fields like line_id / player_id / match_id.
+
+    Audit P1 #6 (remediation v3): accept line_tolerance so the dashboard /
+    poller / API can forward the operator's choice instead of being hard-wired
+    to the module default. None means "use LINE_TOLERANCE constant".
     """
     root = _project_root()
     data_dir = root / "data"
@@ -250,6 +255,11 @@ def compare_fantasy_vs_sharp(
     if pl_key:
         sharp_meta["propline_calls"] = pl_meta.get("propline_calls", 0)
 
+    # Audit P1 #6 (remediation v3): forward line_tolerance so the dashboard /
+    # poller / API all use the operator's chosen value instead of the module
+    # default. None here means "use LINE_TOLERANCE constant" inside rank_legs.
+    from ud_edge.matcher import LINE_TOLERANCE as _LT_DEFAULT
+    _effective_lt = line_tolerance if line_tolerance is not None else _LT_DEFAULT
     ranked = rank_legs(
         legs,
         break_even=entry.break_even,
@@ -259,8 +269,8 @@ def compare_fantasy_vs_sharp(
         sharp_book_index=sharp_index or None,
         full_game_only=full_game_only,
         sharp_policy="sharp_authoritative_quarantine",
+        line_tolerance=_effective_lt,
     )
-
     if mispriced_only:
         ranked = [
             r for r in ranked

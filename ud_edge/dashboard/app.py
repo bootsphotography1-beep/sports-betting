@@ -89,6 +89,15 @@ def opportunities(
     mispriced_only: bool = Query(False),
     refresh: bool = Query(False),
     n_entries: int = Query(4, ge=1, le=8),
+    # Audit P1 #6 (remediation v3): allow the dashboard to forward a custom
+    # line tolerance. None (default) means "use UD_LINE_TOLERANCE env var, then
+    # fall back to the module constant".
+    line_tolerance: Optional[float] = Query(
+        None,
+        ge=0.0,
+        le=5.0,
+        description="Fuzzy-match line gap (0.5 = exact, 1.0 = soft-line tolerant)",
+    ),
 ):
     # Guard: reject NaN/inf values that would otherwise corrupt the JSON response
     # or cause degenerate ranking math (e.g. all legs pass/fail threshold).
@@ -123,6 +132,7 @@ def opportunities(
         full_game_only=full_game_only,
         mispriced_only=mispriced_only,
         n_entries=n_entries,
+        line_tolerance=line_tolerance,
     )
 
     if not refresh and _CACHE.get("payload") is not None and _CACHE.get("key") == key:
@@ -138,6 +148,7 @@ def opportunities(
         n_entries=n_entries,
         force_fetch=refresh or _CACHE.get("payload") is None,
         return_ranked=True,
+        line_tolerance=line_tolerance,
     )
     # compare_fantasy_vs_sharp returns (payload_dict, ranked_list) when
     # return_ranked=True. The ranked list is stored separately for lineups.

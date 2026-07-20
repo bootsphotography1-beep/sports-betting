@@ -297,6 +297,12 @@ def opportunities_to_dict(r: RankedLeg, break_even: float = 0.524) -> dict:
         "mispricing_edge_pp": (
             round(r.mispricing_edge_pp, 2) if r.mispricing_edge_pp is not None else None
         ),
+        # Audit P1 #6 (remediation v3): surface fuzzy-match distance so the UI
+        # can warn "matched within X line gap" instead of treating all matches
+        # as exact. None when no sharp book was matched.
+        "match_distance": (
+            round(r.match_distance, 2) if r.match_distance is not None else None
+        ),
         "is_mispriced": bool(
             r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
         ),
