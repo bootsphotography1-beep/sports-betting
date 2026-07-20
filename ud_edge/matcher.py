@@ -14,6 +14,17 @@ from ud_edge.models import Leg, RankedLeg
 from ud_edge.no_vig import no_vig, edge_pp
 
 
+# Audit P1 #6: line tolerance is now configurable via env var, CLI flag,
+# and rank_legs(line_tolerance=...) parameter. Default stays 0.5 to preserve
+# Wave 2A's exact-tolerance semantics; operators can opt up to 1.0+ via
+# `UD_LINE_TOLERANCE` env var or `--line-tolerance` on the CLI.
+import os as _os
+_LINE_TOL_DEFAULT = float(_os.environ.get("UD_LINE_TOLERANCE", "0.5"))
+# Module-level constant. Override at import time via UD_LINE_TOLERANCE env var,
+# or per-call via rank_legs(line_tolerance=...), or via --line-tolerance CLI.
+LINE_TOLERANCE: float = _LINE_TOL_DEFAULT
+
+
 # Stat-name blacklist: lines where the favorite side is so obviously likely
 # to hit that UD's underpricing isn't a real +EV signal — just an illiquid
 # niche market. Examples: "Under 0 RBIs" hits ~80% of the time for any
@@ -151,6 +162,7 @@ def rank_legs(
     sharp_policy: str = "sharp_authoritative_quarantine",
     reject_started: bool = True,
     reject_live: bool = True,
+    line_tolerance: float = LINE_TOLERANCE,
 ) -> list[RankedLeg]:
     """Rank legs by edge above break-even. Only include legs that clear min_true_prob.
 
@@ -213,8 +225,13 @@ def rank_legs(
     # Obscure sports where liquidity is too thin for sharp pricing
     EXCLUDE_SPORTS = {"CS", "LOL", "DOTA", "VAL", "ESPORTS", "RACING", "CFL"}
 
-    # Pre-compile line tolerance: a sharp-book line within ±0.5 of UD's counts as same line
-    LINE_TOLERANCE = 0.5
+    # Audit P1 #6: line_tolerance is now an explicit parameter (above) that
+    # defaults to the module-level LINE_TOLERANCE constant. The old code had
+    # a hard-coded LINE_TOLERANCE = 0.5 inside the function body, making it
+    # impossible to opt up without editing source. Soft fantasy lines that
+    # differed by 1.0+ from sharp silently fell through and ranked on
+    # fantasy no-vig alone. Operators can now pass --line-tolerance=1.0 (or
+    # higher) via the CLI / UD_LINE_TOLERANCE env var.
 
     for leg in legs:
         if filter_trivial and is_trivial_under_zero(leg):
@@ -310,7 +327,7 @@ def rank_legs(
                 leg.player_name,
                 leg.stat_name,
                 leg.line_value,
-                line_tolerance=LINE_TOLERANCE,
+                line_tolerance=line_tolerance,
                 event_title=leg.match_title,
                 scheduled_at=leg.scheduled_at,
             )

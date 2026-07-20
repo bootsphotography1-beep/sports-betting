@@ -61,6 +61,11 @@ class SharpMatch:
     under_decimal: float
     bookmaker: str
     line_value: float
+    # Audit P1 #6: distance between the fantasy line_value and the sharp line.
+    # 0.0 for an exact-key match; abs(fantasy - sharp) for a fuzzy match.
+    # Surface this on the dashboard so operators can see "fuzzy match at 1.5
+    # line gap" instead of treating it like an exact match.
+    match_distance: float = 0.0
 
 
 # Canonical fantasy/UD stat names → common sportsbook market aliases
@@ -719,6 +724,10 @@ def find_sharp_match(
                 under_decimal=sharp["under_decimal"],
                 bookmaker=sharp.get("bookmaker", "sharp"),
                 line_value=float(lv) if lv is not None else line_value,
+                # Audit P1 #6: surface fuzzy-match distance so the dashboard
+                # can show "exact (Δ=0)" vs "fuzzy (Δ=0.5)". Exact-key match
+                # within tolerance is still distance 0 if the lines agree.
+                match_distance=abs(float(lv) - line_value) if lv is not None else 0.0,
             )
 
     # Fuzzy: same normalized player, canonical stat, nearby line
@@ -747,6 +756,11 @@ def find_sharp_match(
             under_decimal=v["under_decimal"],
             bookmaker=v.get("bookmaker", "sharp"),
             line_value=float(lv),
+            # Audit P1 #6: report how far off the sharp line is from fantasy
+            # so the dashboard can distinguish "fuzzy at Δ=0.5" from
+            # "fuzzy at Δ=1.5" — both are still within tolerance when the
+            # operator opts up, but very different match qualities.
+            match_distance=abs(float(lv) - line_value),
         )
 
     return None

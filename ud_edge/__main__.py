@@ -174,6 +174,7 @@ def run_once(
     use_apisports: bool = True,
     n_entries: int = 1,
     full_game_only: bool = False,
+    line_tolerance: float | None = None,  # Audit P1 #6
 ) -> int:
     entry = UD_PAYOUTS[entry_type]
     effective_n_legs = top_n if top_n is not None else entry.n_legs
@@ -257,6 +258,11 @@ def run_once(
         print(f"[sharp] cross-ref skipped (error: {e})")
 
     # 4. Rank + EV
+    # Audit P1 #6: forward --line-tolerance (or env var default) into rank_legs
+    # so soft lines 1.0+ away from sharp can still be matched when the
+    # operator opts up. Defaults to module LINE_TOLERANCE (0.5) if None.
+    from ud_edge.matcher import LINE_TOLERANCE as _LT_DEFAULT
+    effective_line_tolerance = line_tolerance if line_tolerance is not None else _LT_DEFAULT
     ranked = rank_legs(
         legs,
         break_even=entry.break_even,
@@ -265,6 +271,7 @@ def run_once(
         injury_index=injury_index,
         sharp_book_index=sharp_index,
         full_game_only=full_game_only,
+        line_tolerance=effective_line_tolerance,
     )
     top = top_n_for_entry(ranked, n_legs=effective_n_legs)
 
@@ -345,7 +352,10 @@ def run_once(
 
 
 # ── CLI plumbing ───────────────────────────────────────────────────────────
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser. Factored out of main() so tests can
+    inspect the argparse surface without running the full command.
+    """
     parser = argparse.ArgumentParser(
         prog="ud-edge",
         description="No-vig +EV detector for Underdog Fantasy player props",
@@ -380,6 +390,15 @@ def main(argv: list[str] | None = None) -> int:
                         help="Minimum true probability per leg (default 0.55)")
     parser.add_argument("--min-edge-pp", type=float, default=0.5,
                         help="Minimum edge in percentage points (default 0.5)")
+    # Audit P1 #6: --line-tolerance was hard-coded to 0.5 inside rank_legs.
+    # Now exposed so operators can opt up to match soft lines that differ by
+    # 1.0+ from sharp (common for alt-line books). Default 0.5 preserves
+    # Wave 2A's exact-tolerance semantics; can also be set via the
+    # UD_LINE_TOLERANCE env var (read at import time in matcher.py).
+    parser.add_argument("--line-tolerance", type=float, default=None,
+                        help="Max |fantasy_line - sharp_line| to count as a "
+                             "match. Default 0.5 (UD_LINE_TOLERANCE env var "
+                             "overrides). Try 1.0 to capture 1-line-gap soft lines.")
     parser.add_argument("--cache", type=str,
                         default="data/ud_lines_cache.json",
                         help="Disk cache path")
@@ -425,10 +444,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="Dashboard bind host (default 0.0.0.0 for Tailscale)")
     parser.add_argument("--port", type=int, default=8787,
                         help="Dashboard bind port (default 8787)")
+    return parser
 
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
-    # ── Dashboard (early-exit) ─────────────────────────────────────────────
+    # ── Dashboard (early-exit) ──────────────────────────────────
     if args.serve:
         try:
             import uvicorn
@@ -484,16 +507,17 @@ def main(argv: list[str] | None = None) -> int:
         entry = UD_PAYOUTS[args.entry]
         top_n = args.top if args.top is not None else entry.n_legs
         return run_once(
-            sport_filter=sport_filter,
-            entry_type=args.entry,
-            top_n=top_n,
-            min_true_prob=args.min_true_prob,
-            min_edge_pp=args.min_edge_pp,
-            cache_path=cache_path,
-            save_path=save_path,
-            n_entries=args.entries,
-            full_game_only=args.full_game_only,
-        )
+                    sport_filter=sport_filter,
+                    entry_type=args.entry,
+                    top_n=top_n,
+                    min_true_prob=args.min_true_prob,
+                    min_edge_pp=args.min_edge_pp,
+                    cache_path=cache_path,
+                    save_path=save_path,
+                    n_entries=args.entries,
+                    full_game_only=args.full_game_only,
+                    line_tolerance=args.line_tolerance,  # Audit P1 #6
+                )
 
     if args.snapshot or args.stale_report:
         from ud_edge.stale_pricing import (
