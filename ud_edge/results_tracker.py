@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from ud_edge.models import RankedLeg, Leg
+from ud_edge.matcher import effective_true_prob
 
 
 # Project-root-resolved path: works from any CWD
@@ -41,6 +42,21 @@ def _leg_key(leg: Leg) -> str:
     return f"{leg.sport_id}|{leg.player_id}|{leg.stat_name}|{leg.line_value}"
 
 
+def _predicted_prob(pick: dict) -> float:
+    """Return the probability the *board* used to recommend this pick.
+
+    Audit (remediation v3 — calibration residual): the pipeline now uses
+    `effective_true_prob` (sharp when matched, fantasy otherwise) for board EV.
+    Calibration must measure the same probability the board acted on, otherwise
+    Brier/log-loss drift between fantasy-pred and sharp-pred and you'll think
+    the model is miscalibrated when really it's the contract that changed.
+
+    Legacy picks logged before this fix don't have `effective_true_prob`;
+    fall back to `picked_true_prob` so old data still flows through.
+    """
+    return pick.get("effective_true_prob", pick["picked_true_prob"])
+
+
 def log_picks(lineups: list[list[RankedLeg]], entry_type: str = "6-flex",
               n_entries: int = 4) -> int:
     """Append today's picks to results.json. Returns the number of new picks logged.
@@ -61,6 +77,7 @@ def log_picks(lineups: list[list[RankedLeg]], entry_type: str = "6-flex",
             full_key = f"{key}|{today}"
             if full_key in existing_keys:
                 continue
+            effective = effective_true_prob(r.picked_true_prob, r.sharp_true_prob)
             data["picks"].append({
                 "date": today,
                 "entry": entry_idx,
@@ -74,7 +91,9 @@ def log_picks(lineups: list[list[RankedLeg]], entry_type: str = "6-flex",
                 "stat": leg.stat_name,
                 "line_value": leg.line_value,
                 "picked_side": r.picked_side,
-                "picked_true_prob": r.picked_true_prob,
+                "picked_true_prob": r.picked_true_prob,  # fantasy-only (legacy)
+                "sharp_true_prob": r.sharp_true_prob,    # raw sharp prob (may be None)
+                "effective_true_prob": effective,        # the prob the board EV used
                 "picked_american": (
                     leg.higher_american if r.picked_side == "higher"
                     else leg.lower_american
@@ -147,10 +166,12 @@ def calibration_stats() -> dict:
     if not resolved:
         return {"total_resolved": 0, "message": "no resolved picks yet"}
 
-    # Calibration buckets
+    # Calibration buckets — measure the probability the board EV used
+    # (effective_true_prob when sharp was matched, picked_true_prob otherwise).
+    # See _predicted_prob for the rationale.
     buckets = {}
     for p in resolved:
-        prob = p["picked_true_prob"]
+        prob = _predicted_prob(p)
         bucket = f"{int(prob * 20) * 5}-{int(prob * 20) * 5 + 5}%"
         buckets.setdefault(bucket, {"pred_sum": 0, "hits": 0, "n": 0})
         buckets[bucket]["pred_sum"] += prob
@@ -166,15 +187,15 @@ def calibration_stats() -> dict:
             "hit_rate": v["hits"] / v["n"],
         }
 
-    # Brier score
-    brier = sum((p["picked_true_prob"] - (1 if p["outcome"] == "HIT" else 0)) ** 2
+    # Brier score — uses effective prob (same as board EV).
+    brier = sum((_predicted_prob(p) - (1 if p["outcome"] == "HIT" else 0)) ** 2
                 for p in resolved) / len(resolved)
 
-    # Log loss
+    # Log loss — uses effective prob.
     eps = 1e-15
     log_loss = -sum(
-        math.log(max(min(p["picked_true_prob"], 1 - eps), eps)) if p["outcome"] == "HIT"
-        else math.log(max(min(1 - p["picked_true_prob"], 1 - eps), eps))
+        math.log(max(min(_predicted_prob(p), 1 - eps), eps)) if p["outcome"] == "HIT"
+        else math.log(max(min(1 - _predicted_prob(p), 1 - eps), eps))
         for p in resolved
     ) / len(resolved)
 
