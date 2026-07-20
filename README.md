@@ -427,22 +427,38 @@ bash scripts/smoke_dashboard.sh
 ## Audit remediations (2026-07-20)
 
 An independent audit (tip `85d6722`) found **6 P0/P1 issues** in the live code path
-that overstate EV, lose field identity, or under-count API spend. All six are fixed
-in this branch. New tests pin the contract so each bug can't silently re-appear.
+that overstate EV, lose field identity, or under-count API spend. A second pass
+(tip `fa6d27b`) closed the named findings. A third pass (tip `4855201`, this branch)
+closed all v3 residuals flagged in the second re-audit.
 
 | # | Severity | Finding | Fix | Tests |
-|---|---|---|---|---|
-| **P0 #1** | Critical | `deliver.py` used `max(fantasy, sharp)` for per-card probability, overstating edge when sharp was slightly bearish-but-in-band | Replaced all 3 sites with `effective_true_prob()` (sharp-authoritative contract: returns sharp when present) | 8 (`test_audit_p0_probability_contract.py`) |
-| **P0 #2** | Critical | `compare.py` and `dashboard/app.py` lineup EV used fantasy-only average and homogeneous `expected_value()` — both understated variance and over-stated edge | Both sites now use `effective_true_prob` averaged + `expected_value_per_card()` (heterogeneous exact EV) | 6 (`test_audit_p0_lineup_ev_contract.py`) |
-| **P1 #3** | High | `docs/METHODOLOGY.md` and `README.md` quoted stale break-evens (the old 6-flex BE and the old 3-man-power BE — both off by several percentage points vs the live `UD_PAYOUTS` table) | Both docs now quote `UD_PAYOUTS` directly; stale numbers guarded by tests | 18 (`test_audit_p1_documentation.py`) |
-| **P1 #4** | High | Poller called `budget.record(1)` once per cycle; a real cycle makes ~13–80 HTTP calls (1 events + N odds per sport). Daily limit silently blown 60-80x | `PropLineClient.calls_made` counter; `compare_fantasy_vs_sharp` reports count in `sharp_meta.propline_calls`; poller records the actual delta | 6 (`test_audit_p1_poller_budget.py`) |
-| **P1 #5** | High | Poller rebuilt `RankedLeg` from JSON-serialized `flat[]`, losing `sharp_book`, `match_id`, `fantasy_source` and silently under-alerting | Poller now passes `return_ranked=True` and consumes the live `RankedLeg` list — no JSON round-trip | 3 (`test_audit_p1_poller_ranked_rebuild.py`) |
-| **P1 #6** | Medium | `LINE_TOLERANCE = 0.5` was a function-local constant; soft fantasy lines 1.0+ away from sharp silently fell through | Promoted to module constant; `rank_legs(line_tolerance=...)` parameter; `--line-tolerance` CLI flag; `UD_LINE_TOLERANCE` env var; `SharpMatch.match_distance` for fuzzy-match confidence | 7 (`test_audit_p1_line_tolerance.py`) |
+|---|----------|---------|-----|-------|
+| **P0 #1** | Critical | `deliver.py` used `max(fantasy, sharp)` for per-card probability, overstating edge when sharp was slightly bearish-but-in-band | v2: 3 sites in `deliver.py` → `effective_true_prob()`. v3: same contract extended to `__main__.py` console summaries (CLI no longer shows fantasy-only board). | 8 (`test_audit_p0_probability_contract.py`) + 4 (`test_audit_p0_console_residual.py`) |
+| **P0 #2** | Critical | `compare.py` and `dashboard/app.py` lineup EV used fantasy-only average and homogeneous `expected_value()` — both understated variance and over-stated edge | v2: compare + dashboard → `effective_true_prob` + `expected_value_per_card`. v3: same contract extended to `deliver.py` Markdown and `__main__.py` entry-type comparison. Partial-card homogeneous fallback only when `len(per_leg) < entry.n_legs` (slate thinner than the entry). | 6 (`test_audit_p0_lineup_ev_contract.py`) + 3 (`test_audit_p0_deliver_residual.py`) |
+| **P1 #3** | High | `docs/METHODOLOGY.md` and `README.md` quoted stale break-evens (the old 6-flex BE and the old 3-man-power BE — both off by several percentage points vs the live `UD_PAYOUTS` table) | Both docs now quote `UD_PAYOUTS` directly; stale numbers guarded by absolute-string tests. v3 also paraphrased the README remediations row so the guardrail doesn't self-fire on its own audit narrative. | 18 (`test_audit_p1_documentation.py`) |
+| **P1 #4** | High | Poller called `budget.record(1)` once per cycle; a real cycle makes ~13–80 HTTP calls (1 events + N odds per sport). Daily limit silently blown 60-80x | `PropLineClient.calls_made` counter; `compare_fantasy_vs_sharp` reports count in `sharp_meta.propline_calls`; poller records the actual delta. v3: pin tests `monkeypatch.setenv("PROPLINE_API_KEY", "testkey-not-real")` so the early-return gate doesn't block stubs in CI. | 6 (`test_audit_p1_poller_budget.py`) |
+| **P1 #5** | High | Poller rebuilt `RankedLeg` from JSON-serialized `flat[]`, losing `sharp_book`, `match_id`, `fantasy_source` and silently under-alerting | Poller now passes `return_ranked=True` and consumes the live `RankedLeg` list — no JSON round-trip. v3: same `monkeypatch.setenv` fix so the pin tests reach the stub. | 3 (`test_audit_p1_poller_ranked_rebuild.py`) |
+| **P1 #6** | Medium | `LINE_TOLERANCE = 0.5` was a function-local constant; soft fantasy lines 1.0+ away from sharp silently fell through. `SharpMatch.match_distance` was computed but never copied onto `RankedLeg` or surfaced in dashboard JSON. | v2: module constant + env var + CLI flag + `rank_legs(line_tolerance=...)`. v3: full plumbing through `compare_fantasy_vs_sharp` + dashboard `/api/opportunities` + poller (`UD_LINE_TOLERANCE`); `RankedLeg.match_distance` field populated from `SharpMatch`; `opportunities_to_dict` emits it; `/api/lineups` accepts `line_tolerance` and 409s if it disagrees with the cached opportunities run. | 7 (`test_audit_p1_line_tolerance.py`) + 7 (`test_audit_p1_line_tolerance_plumbing.py`) |
 
-**Deferred (P0 #7):** Side-flip evaluation. The pipeline always picks the fantasy
-favorite, then asks whether sharp agrees. It never flips to the fantasy underdog
-when sharp prefers that side. This is a real (separate) edge class; needs a
-ranking pipeline rewrite. Out of scope for this remediation wave.
+**v3 calibration residual:** `results_tracker.log_picks()` now also stores
+`effective_true_prob` (and `sharp_true_prob` raw) alongside `picked_true_prob`.
+Brier / log-loss / bucket stats use `_predicted_prob()` which prefers
+`effective_true_prob` and falls back to `picked_true_prob` for legacy picks —
+so the calibration sample measures the probability the **board** acted on,
+not a different one.
+
+**Deferred (still open):**
+- **P0 #7 side-flip.** Pipeline always picks the fantasy favorite. Need to
+  evaluate both sides vs sharp, or an explicit soft-line / line-gap model.
+- **Payout verification.** `_PAYOUT_MODEL_VERIFIED = False`; no
+  `docs/PAYOUT_RULES.md`. Don't treat EV as actionable until ≥50 settled
+  legs and the payout table is archived.
+- **Calibration sample.** `data/results.json` is empty. Calibration only
+  meaningful once outcomes are resolved (manual entry via
+  `--settle <pick_id> <stat_value>` or a stats-API integration).
+
+**Live-money gate:** Until all three deferred items are closed, this
+branch is research-only.
 
 **Test additions:** 383 tests total = 298 (pre-audit) + 8 (P0 #1) + 6 (P0 #2) +
 18 (P1 #3) + 6 (P1 #4) + 3 (P1 #5) + 7 (P1 #6) + ... + remaining adjustments.
