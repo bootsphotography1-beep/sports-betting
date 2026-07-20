@@ -97,6 +97,10 @@ class PropLineClient:
         self.ttl_seconds = ttl_seconds
         self.session = requests.Session()
         self.session.headers.update({"X-API-Key": self.api_key})
+        # Audit P1 #4: count real HTTP calls so the poller can record the
+        # right number against its daily budget. Cached _get() calls do NOT
+        # increment (we already paid for them earlier in the same window).
+        self.calls_made: int = 0
 
     def _get(self, path: str, params: Optional[dict] = None, cache_key: str = "") -> object:
         params = dict(params or {})
@@ -104,11 +108,14 @@ class PropLineClient:
         if self.cache_path and cache_key:
             cache_file = self.cache_path / f"propline_{cache_key}.json"
             if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < self.ttl_seconds:
+                # Cache hit — do NOT count as a billable call.
                 return json.loads(cache_file.read_text())
         url = f"{self.BASE}{path}"
         r = self.session.get(url, params=params, timeout=25)
         r.raise_for_status()
         data = r.json()
+        # Real HTTP call — increment the counter.
+        self.calls_made += 1
         if self.cache_path and cache_key:
             self.cache_path.mkdir(parents=True, exist_ok=True)
             cache_file = self.cache_path / f"propline_{cache_key}.json"
@@ -333,6 +340,11 @@ def build_propline_indexes(
         meta["errors"].append(str(e))
         return {}, [], meta
 
+    # Audit P1 #4: snapshot the counter so we can report how many real HTTP
+    # calls this cycle made. The poller uses this to advance its budget by
+    # the actual amount instead of a fixed 1.
+    start_calls = client.calls_made
+
     books = list(SHARP_BOOK_PRIORITY[:5]) + list(FANTASY_BOOKS)
     for sport in sports:
         try:
@@ -367,6 +379,9 @@ def build_propline_indexes(
         *(v.get("source", "propline") for v in sharp_index.values()),
         *(p.get("source", "propline") for p in fantasy_props),
     })
+    # How many billable HTTP calls happened during this build. The poller
+    # reads this and calls budget.record(meta["propline_calls"]) accordingly.
+    meta["propline_calls"] = client.calls_made - start_calls
     return sharp_index, fantasy_props, meta
 
 

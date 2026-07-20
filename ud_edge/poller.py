@@ -151,6 +151,11 @@ def _run_poll_cycle(
     # One complete fetch+rank cycle via compare_fantasy_vs_sharp.
     # This already handles PropLine fetching, UD line fetching, sharp indexing,
     # and ranking with sharp_authoritative_quarantine policy.
+    #
+    # Audit P1 #5: pass return_ranked=True so the live RankedLeg list is
+    # returned (no JSON serialization round-trip, no field loss). The poller
+    # used to rebuild RankedLeg from the flat dict list which silently dropped
+    # sharp_book, match_id, fantasy_source, etc.
     try:
         result = compare_fantasy_vs_sharp(
             entry_type="6-flex",
@@ -162,58 +167,37 @@ def _run_poll_cycle(
             fantasy_csvs=None,
             n_entries=4,
             force_fetch=True,
+            return_ranked=True,
         )
     except Exception as e:
         print(f"[poll] compare_fantasy_vs_sharp error: {e}")
         return [], None, {"budget": snap, "skipped": False, "error": str(e)}
 
-    # Record one PropLine call (the compare pipeline does one PropLine fetch)
-    budget.record(1, use_reserve=use_reserve)
+    # Unpack (payload, ranked) tuple. Fallback to payload-only if the
+    # pipeline was called without return_ranked for some reason.
+    if isinstance(result, tuple) and len(result) == 2:
+        result_payload, ranked = result
+    else:
+        result_payload = result
+        ranked = []
 
-    # Extract ranked legs from the flat result
-    flat: list[dict] = result.get("flat", [])
-    ranked: list[RankedLeg] = []
-    for item in flat:
-        # Reconstruct RankedLeg from the flat dict (opportunities_to_dict serialization)
-        from ud_edge.models import RankedLeg as _RL
-        from ud_edge.models import Leg as _Leg
-        leg_d = item.get("leg", {})
-        leg = _Leg(
-            line_id=leg_d.get("line_id", ""),
-            player_id=leg_d.get("player_id", ""),
-            player_name=leg_d.get("player_name", "Unknown"),
-            sport_id=leg_d.get("sport_id", "UNK"),
-            match_id=leg_d.get("match_id"),
-            match_title=leg_d.get("match_title"),
-            scheduled_at=leg_d.get("scheduled_at"),
-            stat_name=leg_d.get("stat_name", ""),
-            line_value=float(leg_d.get("line_value", 0) or 0),
-            line_type=leg_d.get("line_type", "balanced"),
-            higher_american=leg_d.get("higher_american", -110),
-            higher_decimal=leg_d.get("higher_decimal", 1.91),
-            higher_multiplier=leg_d.get("higher_multiplier", 0.9),
-            lower_american=leg_d.get("lower_american", -110),
-            lower_decimal=leg_d.get("lower_decimal", 1.91),
-            lower_multiplier=leg_d.get("lower_multiplier", 0.9),
-        )
-        r = _RL(
-            leg=leg,
-            higher_true_prob=item.get("higher_true_prob", 0.5),
-            higher_implied_prob=item.get("higher_implied_prob", 0.5),
-            higher_edge_pp=item.get("higher_edge_pp", 0.0),
-            lower_true_prob=item.get("lower_true_prob", 0.5),
-            lower_implied_prob=item.get("lower_implied_prob", 0.5),
-            lower_edge_pp=item.get("lower_edge_pp", 0.0),
-            picked_side=item.get("picked_side", "higher"),
-            picked_true_prob=item.get("picked_true_prob", 0.5),
-            picked_edge_pp=item.get("picked_edge_pp", 0.0),
-            overround=item.get("overround"),
-            sharp_true_prob=item.get("sharp_true_prob"),
-            sharp_book=item.get("sharp_book"),
-            sharp_overround=item.get("sharp_overround"),
-            mispricing_edge_pp=item.get("mispricing_edge_pp"),
-        )
-        ranked.append(r)
+    # Record the actual PropLine HTTP calls this cycle made.
+    # Audit P1 #4: was budget.record(1) which under-counted every cycle by
+    # ~13-80x (one events call + N odds calls per sport per cycle). The
+    # compare pipeline reports the real count in sharp_meta.propline_calls;
+    # when it's missing (e.g. PROPLINE_API_KEY not set), record 0 so we don't
+    # claim a call we didn't make.
+    sharp_meta = result_payload.get("sharp_meta", {}) if isinstance(result_payload, dict) else {}
+    propline_calls = int(sharp_meta.get("propline_calls", 0) or 0)
+    if propline_calls > 0:
+        budget.record(propline_calls, use_reserve=use_reserve)
+    elif propline_calls == 0 and isinstance(sharp_meta, dict) and "propline_calls" not in sharp_meta:
+        # No PropLine key configured — don't claim a call we didn't make.
+        pass
+
+    # Audit P1 #5: 'ranked' is now the LIVE RankedLeg list returned from
+    # compare_fantasy_vs_sharp(return_ranked=True). No JSON round-trip, no
+    # field loss. The old flat-dict reconstruction path is gone.
 
     # Mispriced = sharp_edge_pp >= 2.0
     mispriced = [r for r in ranked if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0]
@@ -225,8 +209,8 @@ def _run_poll_cycle(
         "now": now,
         "budget": budget.snapshot(),
         "skipped": False,
-        "sports_count": len(result.get("sports", [])),
-        "opportunities_count": result.get("totals", {}).get("opportunities", 0),
+        "sports_count": len(result_payload.get("sports", [])),
+        "opportunities_count": result_payload.get("totals", {}).get("opportunities", 0),
     }
     return mispriced, nearest, meta
 

@@ -244,6 +244,11 @@ def compare_fantasy_vs_sharp(
             *sharp_meta.get("sources", []),
             *(v.get("source", "propline") for v in pl_sharp.values()),
         })
+    # Audit P1 #4: surface the actual PropLine HTTP-call count so the poller
+    # can advance its budget by the real number (was hard-coded to 1 before,
+    # under-counting cycles that hit ~60-80 endpoints for 6 sports).
+    if pl_key:
+        sharp_meta["propline_calls"] = pl_meta.get("propline_calls", 0)
 
     ranked = rank_legs(
         legs,
