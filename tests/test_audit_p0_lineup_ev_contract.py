@@ -18,12 +18,10 @@ These tests pin:
 """
 from __future__ import annotations
 
-from unittest.mock import patch
 
 import pytest
 
 from ud_edge.flex_math import UD_PAYOUTS, expected_value_per_card
-from ud_edge.matcher import effective_true_prob
 
 
 # ── expected_value_per_card contract (heterogeneous EV) ───────────────────────

@@ -15,10 +15,8 @@ pass under the new `effective_true_prob` code.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 
 from ud_edge.deliver import build_multi_report
-from ud_edge.flex_math import UD_PAYOUTS
 from ud_edge.matcher import effective_true_prob
 from ud_edge.models import Leg, RankedLeg
 
