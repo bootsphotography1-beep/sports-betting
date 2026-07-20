@@ -421,8 +421,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="PropLine daily call cap (default 5000).")
     parser.add_argument("--alert-pp", type=float, default=1.5,
                         help="Minimum same-side mispricing (pp) to push an alert (default 1.5).")
-    parser.add_argument("--host", type=str, default="127.0.0.1",
-                        help="Dashboard bind host (default 127.0.0.1)")
+    parser.add_argument("--host", type=str, default="0.0.0.0",
+                        help="Dashboard bind host (default 0.0.0.0 for Tailscale)")
     parser.add_argument("--port", type=int, default=8787,
                         help="Dashboard bind port (default 8787)")
 
