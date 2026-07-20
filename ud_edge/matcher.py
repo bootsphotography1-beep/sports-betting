@@ -8,6 +8,7 @@ Per-leg break-even is supplied by the caller — it's entry-type-dependent
 recommended entry type per Derek @BTS methodology.
 """
 from __future__ import annotations
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from ud_edge.models import Leg, RankedLeg
 from ud_edge.no_vig import no_vig, edge_pp
@@ -84,8 +85,9 @@ def is_trivial_under_zero(leg: Leg) -> bool:
         return True
 
     RARE_UNDER_HALF_STATS = {
-        # MLB
+        # MLB — rare at 0.5: hits/runs/RBIs/walks rarely go over 0.5 for most players
         "rbis", "walks", "home_runs", "stolen_bases",
+        "hits", "runs",
         "hits_allowed", "runs_allowed", "walks_allowed",
         "period_1_total_runs_allowed",
         # NFL
@@ -147,6 +149,8 @@ def rank_legs(
     sharp_book_index: Optional[dict] = None,
     full_game_only: bool = False,
     sharp_policy: str = "sharp_authoritative_quarantine",
+    reject_started: bool = True,
+    reject_live: bool = True,
 ) -> list[RankedLeg]:
     """Rank legs by edge above break-even. Only include legs that clear min_true_prob.
 
@@ -166,6 +170,11 @@ def rank_legs(
             agrees (delta >= -2.0pp), use sharp's same-side probability for EV.
             Other policies may be added in future waves.
         full_game_only: skip mid-game / half props and obscure sports.
+        reject_started: if True, skip legs whose scheduled_at is in the past
+            (market has already started). Unknown scheduled_at is allowed.
+            Default True.
+        reject_live: if True, skip legs from live / in-progress events.
+            Default True.
 
     Returns: list of RankedLeg sorted by picked_edge_pp descending.
     """
@@ -175,6 +184,8 @@ def rank_legs(
     skipped_whitelist = 0
     skipped_injury = 0
     skipped_midgame = 0
+    skipped_started = 0
+    skipped_live = 0
     matched_sharp = 0
 
     # When --full-game-only is set, drop mid-game / first-half props that resolve
@@ -209,6 +220,41 @@ def rank_legs(
         if filter_trivial and is_trivial_under_zero(leg):
             skipped_trivial += 1
             continue
+
+        # ── Started / live-market rejection ─────────────────────────────────────
+        if reject_started or reject_live:
+            now = datetime.now(timezone.utc)
+            parsed_scheduled: Optional[datetime] = None
+
+            if leg.scheduled_at:
+                try:
+                    parsed_scheduled = datetime.fromisoformat(leg.scheduled_at)
+                    # Normalize to UTC-aware
+                    if parsed_scheduled.tzinfo is None:
+                        parsed_scheduled = parsed_scheduled.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    # Malformed ISO8601 — treat as unknown, do not reject
+                    parsed_scheduled = None
+
+            if reject_started and parsed_scheduled is not None:
+                if now > parsed_scheduled:
+                    skipped_started += 1
+                    continue
+
+            # reject_live: if the leg has no scheduled_at and the market is live,
+            # we can't determine — skip only if ud_client marked it as live.
+            # The OverUnderLine model has a live_event field; if the leg's
+            # match_title or a flag indicates in-progress, we reject.
+            # For now, reject_live checks the OverUnderLine.liv_event flag that
+            # was used during parsing. Since Leg doesn't carry that flag directly,
+            # we use the presence of a very recent scheduled_at (within the last
+            # 30 minutes) as a live-event proxy when reject_live is True.
+            if reject_live and parsed_scheduled is not None:
+                thirty_min = timedelta(minutes=30)
+                if now > parsed_scheduled and now < parsed_scheduled + thirty_min:
+                    # Started within the last 30 min — live / in-progress
+                    skipped_live += 1
+                    continue
 
         # Full-game-only mode: drop mid-game / obscure-sport legs
         if full_game_only:
@@ -348,6 +394,10 @@ def rank_legs(
         parts.append(f"{skipped_injury} OUT (injury)")
     if skipped_midgame:
         parts.append(f"{skipped_midgame} midgame")
+    if skipped_started:
+        parts.append(f"{skipped_started} started")
+    if skipped_live:
+        parts.append(f"{skipped_live} live")
     if matched_sharp:
         parts.append(f"{matched_sharp} matched-sharp")
     if parts:
