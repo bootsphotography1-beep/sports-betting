@@ -241,7 +241,7 @@ def run_once(
         auto_sports = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"] if (
             sgo_key or odds_key or propline_key
         ) else None
-        sharp_index = build_sharp_index(
+        sharp_index, _sharp_meta = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key or None,
             sgo_sports=auto_sports if sgo_key else None,

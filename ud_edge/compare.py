@@ -119,7 +119,7 @@ def collect_sharp_index(
     propline_key = None if skip_propline else (os.environ.get("PROPLINE_API_KEY", "") or None)
 
     try:
-        index = build_sharp_index(
+        index, _build_meta = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key,
             sgo_sports=sports if sgo_key else None,
@@ -131,6 +131,8 @@ def collect_sharp_index(
         )
         meta["count"] = len(index)
         meta["sources"] = sorted({v.get("source", "?") for v in index.values()})
+        meta["stale_lines_rejected"] = _build_meta.get("stale_lines_rejected", 0)
+        meta["missing_captured_at"] = _build_meta.get("missing_captured_at", 0)
         return index, meta
     except Exception as e:
         meta["errors"].append(str(e))
@@ -233,6 +235,7 @@ def compare_fantasy_vs_sharp(
         injury_index=injury_index,
         sharp_book_index=sharp_index or None,
         full_game_only=full_game_only,
+        sharp_policy="sharp_authoritative_quarantine",
     )
 
     if mispriced_only:

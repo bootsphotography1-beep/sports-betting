@@ -19,11 +19,48 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 import requests
 
 from ud_edge.injury_client import normalize_name as _normalize_name
+
+# TTL for sharp book lines: 30 minutes
+SHARP_LINE_TTL_SECONDS = 30 * 60
+
+
+@dataclass
+class SharpMatch:
+    """Result of a sharp-book lookup for a fantasy leg.
+
+    Attributes
+    ----------
+    sharp_for_higher : float
+        True probability of the OVER side, derived from the sharp book (no-vig).
+    sharp_for_lower : float
+        True probability of the UNDER side, derived from the sharp book (no-vig).
+    both_sides_within_tolerance : bool
+        True when the sharp line matched on the exact key (player+stat+event+line).
+        False when it was a fuzzy match on player+stat only (line within tolerance
+        but not exact). Used to determine whether the match is authoritative.
+    over_decimal : float
+        Raw over decimal price from the sharp book.
+    under_decimal : float
+        Raw under decimal price from the sharp book.
+    bookmaker : str
+        Name of the sharp book (e.g. "Pinnacle", "DraftKings").
+    line_value : float
+        The line value this entry refers to.
+    """
+    sharp_for_higher: float
+    sharp_for_lower: float
+    both_sides_within_tolerance: bool
+    over_decimal: float
+    under_decimal: float
+    bookmaker: str
+    line_value: float
 
 
 # Canonical fantasy/UD stat names → common sportsbook market aliases
@@ -72,32 +109,71 @@ def canonicalize_stat(stat: str) -> str:
     return key
 
 
-def sharp_lookup_key(player_name: str, stat_name: str) -> str:
-    return f"{_normalize_name(player_name)}|{canonicalize_stat(stat_name)}"
+def sharp_lookup_key(player_name: str, stat_name: str, event_title: Optional[str] = None) -> str:
+    """Build a lookup key for a sharp-book entry.
+
+    The key is normalized_player|canonical_stat|event_title. event_title is optional;
+    when absent the key is player|stat (backwards-compatible). When two different
+    events share the same player+stat they get distinct keys so they do not collide.
+    """
+    norm_player = _normalize_name(player_name)
+    canon_stat = canonicalize_stat(stat_name)
+    if event_title:
+        # Embed event so same player/stat on different events produce distinct keys
+        ev = re.sub(r'[^a-z0-9]+', '_', event_title.strip().lower()).strip('_')
+        return f"{norm_player}|{canon_stat}|{ev}"
+    return f"{norm_player}|{canon_stat}"
 
 
 # ── Manual CSV loader ──────────────────────────────────────────────────────
 class ManualSharpBookClient:
     """Reads sharp-book lines from a CSV the user maintains.
 
-    CSV columns: player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker
+    CSV columns: player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker,captured_at,event_title
+    captured_at is required (ISO8601 with timezone). Lines older than 30 minutes are rejected.
+    event_title is optional but recommended — when present it is embedded in the lookup key.
     Header row required.
     """
-    def __init__(self, csv_path: Path):
+    def __init__(self, csv_path: Path, ttl_seconds: int = SHARP_LINE_TTL_SECONDS):
         self.csv_path = csv_path
+        self.ttl_seconds = ttl_seconds
 
-    def load(self) -> dict[str, dict]:
-        """Returns: {f"{normalize(player)}|{stat}": {...}}"""
+    def load(self) -> tuple[dict[str, dict], dict]:
+        """Returns (index, meta) where index = {lookup_key: entry}
+        and meta has stale_lines_rejected and missing_captured_at counts.
+
+        Lines without captured_at or with captured_at older than ttl_seconds
+        are skipped (not indexed) but do not cause crashes.
+        """
         if not self.csv_path.exists():
-            return {}
+            return {}, {"stale_lines_rejected": 0, "missing_captured_at": 0}
         out: dict[str, dict] = {}
+        stale_rejected = 0
+        missing_captured_at = 0
+        now = datetime.now(timezone.utc)
         with open(self.csv_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 if not row.get("player_name") or not row.get("stat_name"):
                     continue
+                captured_at_str = row.get("captured_at", "").strip()
+                if not captured_at_str:
+                    missing_captured_at += 1
+                    continue
+                # Parse ISO8601 timestamp
                 try:
-                    key = sharp_lookup_key(row["player_name"], row["stat_name"])
+                    captured_at = datetime.fromisoformat(captured_at_str.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    missing_captured_at += 1
+                    continue
+                # Check freshness
+                age_seconds = (now - captured_at).total_seconds()
+                if age_seconds > self.ttl_seconds:
+                    stale_rejected += 1
+                    continue
+                try:
+                    event_title = row.get("event_title", "").strip() or None
+                    key = sharp_lookup_key(row["player_name"], row["stat_name"], event_title=event_title)
                     out[key] = {
                         "over_decimal": float(row["over_decimal"]),
                         "under_decimal": float(row["under_decimal"]),
@@ -105,10 +181,13 @@ class ManualSharpBookClient:
                         "line_value": float(row["line_value"]),
                         "player_name": row["player_name"].strip(),
                         "stat_name": canonicalize_stat(row["stat_name"]),
+                        "captured_at": captured_at_str,
+                        "event_title": event_title,
                     }
                 except (ValueError, KeyError, TypeError):
                     continue
-        return out
+        meta = {"stale_lines_rejected": stale_rejected, "missing_captured_at": missing_captured_at}
+        return out, meta
 
 
 # ── The Odds API (player props) ────────────────────────────────────────────
@@ -498,20 +577,27 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
                       cache_path: Optional[Path] = None) -> dict[str, dict]:
     """Build a sharp-book lookup index.
 
-    Returns: {f"{normalize(player)}|{stat}": {over_decimal, under_decimal,
-              bookmaker, line_value, source, ...}}
+    Returns (index, meta) where index = {lookup_key: entry} and meta has
+    source counts and stale_lines_rejected / missing_captured_at diagnostics.
+
+    Lookup key format: normalized_player|canonical_stat|event_title
+    (event_title is optional; when absent the key is player|stat for
+    backwards-compatibility with existing CSV data).
 
     Priority (later wins): manual CSV < Odds API < SportsGameOdds < PropLine
     PropLine is preferred when present (Pinnacle + DK/FD in one feed).
     """
     index: dict[str, dict] = {}
+    meta: dict[str, object] = {"stale_lines_rejected": 0, "missing_captured_at": 0, "sources": []}
 
     # 1. Manual CSV
     if manual_csv is not None and manual_csv.exists():
-        manual = ManualSharpBookClient(manual_csv).load()
-        for k, v in manual.items():
+        manual_index, manual_meta = ManualSharpBookClient(manual_csv).load()
+        for k, v in manual_index.items():
             v["source"] = "manual-csv"
             index[k] = v
+        meta["stale_lines_rejected"] += manual_meta.get("stale_lines_rejected", 0)
+        meta["missing_captured_at"] += manual_meta.get("missing_captured_at", 0)
 
     # 2. The Odds API
     odds_key = odds_api_key or os.environ.get("ODDS_API_KEY", "")
@@ -583,7 +669,7 @@ def build_sharp_index(manual_csv: Optional[Path] = None,
         except Exception as e:
             print(f"[sharp_books] PropLine fetch failed: {e}")
 
-    return index
+    return index, meta
 
 
 def find_sharp_match(
@@ -592,32 +678,75 @@ def find_sharp_match(
     stat_name: str,
     line_value: float,
     line_tolerance: float = 0.5,
-) -> Optional[dict]:
-    """Look up a sharp line for a fantasy prop, with line tolerance."""
+    event_title: Optional[str] = None,
+    scheduled_at: Optional[str] = None,
+) -> Optional[SharpMatch]:
+    """Look up a sharp line for a fantasy prop, with exact line tolerance.
+
+    EXACT tolerance only — no 2x fallback. A line 1.0 away from UD when
+    tolerance=0.5 is REJECTED.
+
+    event_title and scheduled_at are used to build the lookup key so that
+    the same player+stat on different events produce distinct matches.
+    If event_title is None the lookup uses the player|stat key (no event suffix).
+
+    Returns a SharpMatch dataclass (never a raw dict) or None if no match.
+    """
+    from ud_edge.no_vig import no_vig
+
     if not sharp_index:
         return None
-    key = sharp_lookup_key(player_name, stat_name)
-    sharp = sharp_index.get(key)
+
+    norm_player = _normalize_name(player_name)
+    canon_stat = canonicalize_stat(stat_name)
+
+    # Try exact key (with event_title if available)
+    exact_key = sharp_lookup_key(player_name, stat_name, event_title=event_title)
+    sharp = sharp_index.get(exact_key)
     if sharp is not None:
         lv = sharp.get("line_value")
         if lv is None or abs(float(lv) - line_value) <= line_tolerance:
-            return sharp
-        # Same player+stat but line too far — still useful as reference
-        if abs(float(lv) - line_value) <= line_tolerance * 2:
-            return sharp
+            # Exact key + line within tolerance → authoritative
+            try:
+                s_over, s_under, _ = no_vig(sharp["over_decimal"], sharp["under_decimal"])
+            except (ValueError, KeyError):
+                return None
+            return SharpMatch(
+                sharp_for_higher=s_over,
+                sharp_for_lower=s_under,
+                both_sides_within_tolerance=True,
+                over_decimal=sharp["over_decimal"],
+                under_decimal=sharp["under_decimal"],
+                bookmaker=sharp.get("bookmaker", "sharp"),
+                line_value=float(lv) if lv is not None else line_value,
+            )
 
     # Fuzzy: same normalized player, canonical stat, nearby line
-    canon = canonicalize_stat(stat_name)
-    norm_player = _normalize_name(player_name)
+    # Key format: normalized_player|canonical_stat|event_title  OR  normalized_player|canonical_stat
     for k, v in sharp_index.items():
-        parts = k.split("|", 1)
-        if len(parts) != 2:
+        parts = k.split("|")
+        if len(parts) < 2:
             continue
         if parts[0] != norm_player:
             continue
-        if canonicalize_stat(parts[1]) != canon:
+        if canonicalize_stat(parts[1]) != canon_stat:
             continue
         lv = v.get("line_value")
-        if lv is not None and abs(float(lv) - line_value) <= line_tolerance:
-            return v
+        if lv is None or abs(float(lv) - line_value) > line_tolerance:
+            continue
+        # Found a fuzzy match within tolerance
+        try:
+            s_over, s_under, _ = no_vig(v["over_decimal"], v["under_decimal"])
+        except (ValueError, KeyError):
+            continue
+        return SharpMatch(
+            sharp_for_higher=s_over,
+            sharp_for_lower=s_under,
+            both_sides_within_tolerance=False,
+            over_decimal=v["over_decimal"],
+            under_decimal=v["under_decimal"],
+            bookmaker=v.get("bookmaker", "sharp"),
+            line_value=float(lv),
+        )
+
     return None

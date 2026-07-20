@@ -287,14 +287,16 @@ class TestInjuryClient:
 class TestSharpBooksClient:
     def test_manual_csv_load(self, tmp_path):
         from ud_edge.sharp_books_client import ManualSharpBookClient
+        from datetime import datetime, timezone
         csv_path = tmp_path / "sharp.csv"
+        now = datetime.now(timezone.utc).isoformat()
         csv_path.write_text(
-            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker\n"
-            "LeBron James,points,27.5,1.91,1.91,Pinnacle\n"
-            "Jayson Tatum,rebounds,8.5,1.85,1.95,DraftKings\n"
+            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker,captured_at\n"
+            f"LeBron James,points,27.5,1.91,1.91,Pinnacle,{now}\n"
+            f"Jayson Tatum,rebounds,8.5,1.85,1.95,DraftKings,{now}\n"
         )
         client = ManualSharpBookClient(csv_path)
-        idx = client.load()
+        idx, _meta = client.load()
         assert len(idx) == 2
         assert "lebron james|points" in idx
         assert idx["lebron james|points"]["over_decimal"] == 1.91
@@ -311,12 +313,14 @@ class TestSharpBooksClient:
 
     def test_build_sharp_index_with_only_csv(self, tmp_path):
         from ud_edge.sharp_books_client import build_sharp_index
+        from datetime import datetime, timezone
         csv_path = tmp_path / "sharp.csv"
+        now = datetime.now(timezone.utc).isoformat()
         csv_path.write_text(
-            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker\n"
-            "Test Player,points,20.5,1.85,1.95,Pinnacle\n"
+            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker,captured_at\n"
+            f"Test Player,points,20.5,1.85,1.95,Pinnacle,{now}\n"
         )
-        idx = build_sharp_index(manual_csv=csv_path, sgo_key=None)
+        idx, _meta = build_sharp_index(manual_csv=csv_path, sgo_key=None)
         assert "test player|points" in idx
         assert idx["test player|points"]["source"] == "manual-csv"
 

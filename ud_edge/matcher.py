@@ -146,6 +146,7 @@ def rank_legs(
     injury_index: Optional[dict] = None,
     sharp_book_index: Optional[dict] = None,
     full_game_only: bool = False,
+    sharp_policy: str = "sharp_authoritative_quarantine",
 ) -> list[RankedLeg]:
     """Rank legs by edge above break-even. Only include legs that clear min_true_prob.
 
@@ -158,15 +159,15 @@ def rank_legs(
         injury_index: optional {sport_id: {normalized_name: status}} from ESPN feed.
                       Legs where the player is OUT / IR / Suspended / Doubtful
                       are filtered out. Day-To-Day legs are kept (with a flag).
-        sharp_book_index: optional {f"{norm_player}|{stat}": {over_decimal,
-                          under_decimal, bookmaker, line_value}} from sharp books.
-                          When matched, the leg's "sharp true prob" replaces
-                          the UD-implied true prob for ranking — this surfaces
-                          mispricings where the sharp book disagrees with UD.
+        sharp_book_index: optional sharp index from build_sharp_index().
+        sharp_policy: policy for how to use sharp-book matches. Default
+            "sharp_authoritative_quarantine" — when sharp disagrees with fantasy
+            by more than -2.0pp (sharp lower), quarantine the leg; when sharp
+            agrees (delta >= -2.0pp), use sharp's same-side probability for EV.
+            Other policies may be added in future waves.
+        full_game_only: skip mid-game / half props and obscure sports.
 
-    Returns: list of RankedLeg sorted by picked_edge_pp descending. The
-    sort key uses the SHARPER prob (if available) — this boosts legs where
-    the sharp book gives a higher true prob than UD implies.
+    Returns: list of RankedLeg sorted by picked_edge_pp descending.
     """
     ranked: list[RankedLeg] = []
     skipped_threshold = 0
@@ -249,60 +250,56 @@ def rank_legs(
 
         picked_edge = edge_pp(picked_prob, break_even)
 
-        # ── Sharp-book cross-reference ──
+        # ── Sharp-book cross-reference (sharp_authoritative_quarantine policy) ──
         sharp_true_prob: Optional[float] = None
         sharp_book: Optional[str] = None
         sharp_overround: Optional[float] = None
         mispricing_edge_pp: Optional[float] = None
+        quarantined = False  # True when sharp disagrees with fantasy by > -2pp
 
-        if sharp_book_index:
+        if sharp_book_index and sharp_policy == "sharp_authoritative_quarantine":
             from ud_edge.sharp_books_client import find_sharp_match
-            sharp = find_sharp_match(
+            sharp_match = find_sharp_match(
                 sharp_book_index,
                 leg.player_name,
                 leg.stat_name,
                 leg.line_value,
                 line_tolerance=LINE_TOLERANCE,
+                event_title=leg.match_title,
+                scheduled_at=leg.scheduled_at,
             )
 
-            if sharp is not None:
-                try:
-                    s_over, s_under, s_overround = no_vig(
-                        sharp["over_decimal"], sharp["under_decimal"]
-                    )
-                    # Side-aligned: compare sharp OVER to UD higher, UNDER to lower.
-                    # If sharp disagrees with UD's favorite side, flip the pick
-                    # to the sharp-favored side when that side clears thresholds.
-                    sharp_for_higher = s_over
-                    sharp_for_lower = s_under
-                    sharp_fav_side = "higher" if s_over >= s_under else "lower"
-                    sharp_fav_prob = max(s_over, s_under)
+            if sharp_match is not None:
+                # sharp_match is a SharpMatch dataclass
+                sharp_for_higher = sharp_match.sharp_for_higher
+                sharp_for_lower = sharp_match.sharp_for_lower
+                sharp_true_prob = (
+                    sharp_for_higher if picked_side == "higher" else sharp_for_lower
+                )
+                sharp_book = sharp_match.bookmaker
+                sharp_overround = None  # already no-vigged in SharpMatch
 
-                    if sharp_fav_side != picked_side:
-                        # Sharp book disagrees — follow sharp when it's stronger
-                        # than UD's favorite by ≥2pp (real mispricing signal).
-                        if (sharp_fav_prob - picked_prob) * 100 >= 2.0:
-                            picked_side = sharp_fav_side
-                            picked_prob = (
-                                true_over if picked_side == "higher" else true_under
-                            )
-                            picked_edge = edge_pp(picked_prob, break_even)
+                # Mispricing = sharp_same_side - fantasy_same_side (percentage points)
+                delta_pp = (sharp_true_prob - picked_prob) * 100
+                mispricing_edge_pp = delta_pp
 
-                    sharp_true_prob = (
-                        sharp_for_higher if picked_side == "higher" else sharp_for_lower
-                    )
-                    sharp_book = sharp.get("bookmaker", "sharp")
-                    sharp_overround = s_overround
-                    # Mispricing = sharp_same_side - ud_same_side
-                    # Positive = fantasy platform underprices this side vs sharp.
-                    mispricing_edge_pp = (sharp_true_prob - picked_prob) * 100
+                # sharp_authoritative_quarantine: quarantine when delta < -2.0pp
+                # (sharp is MORE BEARISH than fantasy by more than 2pp)
+                if delta_pp < -2.0:
+                    quarantined = True
                     matched_sharp += 1
-                except (ValueError, KeyError, TypeError):
-                    pass
+                else:
+                    # When delta >= -2.0pp: sharp agrees or is bullish → use sharp prob for EV
+                    # (delta already computed above, just fall through to effective_prob)
+                    matched_sharp += 1
 
-        # ── Filter: only keep legs where the favorite side clears thresholds ──
-        # Prefer side-aligned sharp prob when sharp agrees this side is stronger.
-        if sharp_true_prob is not None and mispricing_edge_pp is not None and mispricing_edge_pp > 0:
+        # ── Filter: quarantine when sharp-authoritative policy says to ──
+        if quarantined:
+            # Do not include this leg in ranked output
+            continue
+
+        # Compute effective probability for threshold filtering
+        if sharp_true_prob is not None:
             effective_prob = sharp_true_prob
         else:
             effective_prob = picked_prob
