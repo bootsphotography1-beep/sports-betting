@@ -10,8 +10,7 @@ Covers:
 """
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
-import pytest
-from ud_edge.models import Leg, RankedLeg
+from ud_edge.models import Leg
 from ud_edge.matcher import rank_legs, is_trivial_under_zero
 
 

@@ -16,7 +16,6 @@ from ud_edge.flex_math import (
     expected_value_per_card,
     recommend_entry,
 )
-from ud_edge.models import FlexEntryType
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -197,7 +196,7 @@ class TestExpectedValuePerCard:
 
     def test_exhaustive_outcome_enumeration_sums_to_one(self):
         """Sum of probabilities over all 2^N outcomes must be exactly 1."""
-        entry = UD_PAYOUTS["6-flex"]
+        UD_PAYOUTS["6-flex"]
         leg_probs = [0.52, 0.48, 0.55, 0.47, 0.53, 0.51]
 
         n = len(leg_probs)

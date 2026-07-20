@@ -3,9 +3,8 @@ Strict TDD - tests written FIRST (RED), then implementation (GREEN).
 """
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
-import pytest
 from ud_edge.models import Leg, RankedLeg
-from ud_edge.matcher import rank_legs, dedupe_lineups, build_lineups
+from ud_edge.matcher import dedupe_lineups, build_lineups
 
 
 def make_leg(

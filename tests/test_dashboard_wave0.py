@@ -7,6 +7,8 @@ These tests address:
 """
 from __future__ import annotations
 
+import math
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -123,9 +125,6 @@ def test_opportunities_negative_inf_min_edge_pp_returns_400(client):
 
 
 # ── 5. Non-finite numerics must never appear in JSON payload ───────────────────
-
-import math
-
 
 def test_payload_never_contains_non_finite_floats(client):
     """Verify the JSON payload returned by /api/opportunities never contains NaN/inf.

@@ -1,5 +1,4 @@
 """Tests for Wave 3B: empty-slate crash guard in run_once."""
-import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 

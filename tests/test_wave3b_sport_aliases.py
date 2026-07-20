@@ -1,5 +1,4 @@
 """Tests for Wave 3B: sport aliases in ud_client."""
-import pytest
 from ud_edge.ud_client import resolve_sport_filter, ALIASES
 
 

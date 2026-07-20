@@ -1,7 +1,6 @@
 """Markdown + console output for the daily pick report."""
 from __future__ import annotations
 from datetime import datetime, timezone
-from ud_edge.copy_format import format_block, opportunities_to_dict
 from ud_edge.flex_math import UD_PAYOUTS, expected_value
 from ud_edge.matcher import get_player_status
 from ud_edge.models import Leg, RankedLeg

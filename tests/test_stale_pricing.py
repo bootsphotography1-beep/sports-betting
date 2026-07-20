@@ -4,9 +4,7 @@ and evidence-based stale-opportunity detection.
 All tests use tmp_path DBs and monkeypatched UDClient (no network).
 """
 from __future__ import annotations
-import json
-import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -195,8 +193,8 @@ class TestSchemaMigrationV1ToV2:
 
     def test_migration_preserves_real_v1_db_rows(self, tmp_path):
         """Migrating a real v1 DB must preserve all observations when present."""
-        import sqlite3, shutil
-        from pathlib import Path
+        import sqlite3
+        import shutil
         from ud_edge.stale_pricing import SnapshotStore
 
         candidates = [
@@ -243,7 +241,6 @@ class TestSchemaMigrationV1ToV2:
 
     def test_v2_unique_constraint_source_canonical_key_captured_at(self, tmp_path):
         """v2 unique constraint must be (source, canonical_key, captured_at) without source_line_id."""
-        import sqlite3
         from ud_edge.stale_pricing import SnapshotStore
 
         db_path = tmp_path / "v2_unique_test.sqlite3"
@@ -334,7 +331,7 @@ class TestDedupe:
     def test_dedupe_same_source_key_time_different_line_id(self, tmp_db, leg_jayson_tatum):
         """Identical observation means same source + canonical_key + captured_at.
         Different source_line_id (e.g. platform changed line ID) must still dedupe."""
-        from ud_edge.stale_pricing import SnapshotStore, SnapshotRecord
+        from ud_edge.stale_pricing import SnapshotRecord
         from datetime import datetime, timezone
 
         captured = datetime(2026, 7, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -423,7 +420,7 @@ class TestBatchAtomicity:
 
     def test_insert_standalone_still_works(self, tmp_db, leg_jayson_tatum):
         """insert() must remain safe for standalone use (one record per commit)."""
-        from ud_edge.stale_pricing import SnapshotRecord, capture_underdog
+        from ud_edge.stale_pricing import SnapshotRecord
         captured = datetime(2026, 7, 18, 12, 0, 0, tzinfo=timezone.utc)
 
         rec = SnapshotRecord(
@@ -760,7 +757,7 @@ class TestStaleDetectorStaticDisagreement:
     def test_static_disagreement_no_stale(self, tmp_db, leg_jayson_tatum):
         """Two sources disagree on the line but neither has moved → no stale."""
         from ud_edge.stale_pricing import (
-            capture_underdog, detect_stale_opportunities, SnapshotStore,
+            capture_underdog, detect_stale_opportunities,
         )
         t1 = datetime(2026, 7, 18, 10, 0, 0, tzinfo=timezone.utc)
         # Source A (Underdog) at t1
@@ -865,7 +862,7 @@ class TestEventStartRejection:
         capture_underdog([past_game_leg], tmp_db, captured_at=t2, source="draftkings")
 
         # Without reject_started=True, we get results
-        stale_inclusive = detect_stale_opportunities(
+        detect_stale_opportunities(
             tmp_db, min_stale_minutes=0, fresh_window_minutes=120,
             min_line_gap=0.0, min_prob_gap_pp=0.0, reject_started=False,
         )
@@ -972,8 +969,6 @@ class TestReportOutput:
 class TestCLISnapshotIntegration:
     def test_snapshot_mode_runs_without_network(self, tmp_path, monkeypatch):
         """--snapshot must fetch (monkeypatched), store, and print a report."""
-        import json
-        from pathlib import Path
         from ud_edge import stale_pricing
         from ud_edge.ud_client import UDClient
 
@@ -1045,7 +1040,6 @@ class TestCLISnapshotIntegration:
 
     def test_cli_snapshot_flag_accepted(self, tmp_path, monkeypatch):
         """The CLI must accept --snapshot and --snapshot-db flags without error."""
-        import sys
         from ud_edge.__main__ import main
 
         captured_at = datetime(2026, 7, 18, 12, 0, 0, tzinfo=timezone.utc)
@@ -1774,7 +1768,6 @@ class TestGapThresholds:
         from ud_edge.stale_pricing import (
             SnapshotStore, capture_underdog, detect_stale_opportunities,
         )
-        import datetime as dt_module
 
         class FrozenDatetime(dt_module.datetime):
             @staticmethod
@@ -1905,7 +1898,7 @@ class TestEventStartParsing:
     def test_no_dynamic_sql_interpolation(self, tmp_path, monkeypatch):
         """detect_stale_opportunities must NOT use f-string SQL interpolation.
         Must use bound parameters (SQLite ? placeholders)."""
-        from ud_edge.stale_pricing import SnapshotStore, detect_stale_opportunities, _find_stale_for_market
+        from ud_edge.stale_pricing import SnapshotStore, _find_stale_for_market
         import inspect
 
         db_path = tmp_path / "sql_injection_test.sqlite3"
@@ -2112,8 +2105,8 @@ class TestMigrationCorrectness:
 
     def test_real_v1_db_copy_preserves_4692_rows(self, tmp_path):
         """A real snapshot DB must preserve all observations through migration."""
-        import sqlite3, shutil
-        from pathlib import Path
+        import sqlite3
+        import shutil
         from ud_edge.stale_pricing import SnapshotStore
 
         candidates = [
@@ -2188,7 +2181,7 @@ class TestMovementReporting:
         """A probability-only movement (no line change) must include prob_side
         in the movement record and report."""
         from ud_edge.stale_pricing import (
-            SnapshotStore, capture_underdog, detect_movements, build_movement_report,
+            SnapshotStore, capture_underdog, detect_movements,
         )
         from datetime import datetime, timezone
 

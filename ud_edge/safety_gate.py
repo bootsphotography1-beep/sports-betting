@@ -15,19 +15,15 @@ settled HIT/MISS outcomes must exist before lifting research-only mode.
 from __future__ import annotations
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TypedDict
+
+from ud_edge.results_tracker import RESULTS_PATH
 
 # ── Configuration ──────────────────────────────────────────────────────────
 
 # Absolute minimum settled HIT/MISS legs before the tool can make anything
 # beyond a "research estimate" claim.  Drawn from audit SB-P0-03.
 MIN_SETTLED_LEGS = 50
-
-# Path to the results tracker file.  Imported from results_tracker to avoid
-# a second CWD-relative constant; results_tracker owns all writes.
-# Overridden in tests via monkey-patching of safety_gate.RESULTS_PATH.
-from ud_edge.results_tracker import RESULTS_PATH
 
 # ── Payout-model verification ──────────────────────────────────────────────
 

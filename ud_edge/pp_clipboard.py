@@ -14,7 +14,6 @@ from __future__ import annotations
 import csv
 import re
 from pathlib import Path
-from typing import Optional
 
 __all__ = ["parse_prizepicks_csv", "read_clipboard"]
 
@@ -156,11 +155,8 @@ _STAT_SYNONYMS = {
     "blocks": "blocks",
     "turnovers": "turnovers",
     "home runs": "home runs",
-    "runs": "runs",
     "runs batted in": "runs_batted_in",
-    "hits": "hits",
     "strikeouts": "strikeouts",
-    "walks": "walks",
     "shots": "shots",
     "goals": "goals",
     "saves": "saves",

@@ -13,7 +13,7 @@ unfinalized game. Stale picks (>14 days) are auto-flagged for manual review.
 """
 from __future__ import annotations
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -109,7 +109,7 @@ def resolve_outcomes(current_legs: list[Leg]) -> int:
     """
     data = _load()
     today = datetime.now(timezone.utc)
-    current_keys = {_leg_key(l) for l in current_legs}
+    {_leg_key(curr_lg) for curr_lg in current_legs}
     updated = 0
 
     for pick in data["picks"]:

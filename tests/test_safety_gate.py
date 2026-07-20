@@ -380,9 +380,9 @@ def test_report_inline_unverified_warning_in_header(tmp_path, monkeypatch):
             "build_report must show an inline unverified banner, not only footer"
         # The banner must appear before the per-leg table (i.e., in the header section)
         lines = report.split("\n")
-        table_idx = next((i for i, l in enumerate(lines) if "|" in l and "Sport" in l), -1)
-        banner_idx = next((i for i, l in enumerate(lines)
-                          if "unverified" in l.lower() or "UNVERIFIED" in l), -1)
+        table_idx = next((i for i, ln in enumerate(lines) if "|" in ln and "Sport" in ln), -1)
+        banner_idx = next((i for i, ln in enumerate(lines)
+                          if "unverified" in ln.lower() or "UNVERIFIED" in ln), -1)
         assert banner_idx != -1, "No UNVERIFIED banner found in report"
         assert banner_idx < table_idx, \
             f"UNVERIFIED banner (line {banner_idx}) must appear BEFORE the table (line {table_idx})"
@@ -403,7 +403,6 @@ def test_safety_gate_results_path_from_results_tracker():
 def test_deliver_no_unused_matcher_imports():
     """deliver.py must not import rank_legs, top_n_for_entry, or build_lineups from matcher."""
     import ast
-    import sys
     from pathlib import Path
 
     src = (Path(__file__).resolve().parent.parent / "ud_edge" / "deliver.py").read_text()

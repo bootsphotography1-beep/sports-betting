@@ -485,7 +485,7 @@ def build_lineups(
     # Deduplicate canonical markets before building lineups
     ranked = dedupe_lineups(ranked)
 
-    needed = n_entries * n_legs
+    n_entries * n_legs
     if len(ranked) < n_legs:
         # Not even one full lineup possible
         return []

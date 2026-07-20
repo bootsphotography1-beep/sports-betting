@@ -102,7 +102,7 @@ def collect_fantasy_legs(
             if path.exists():
                 csv_legs = load_fantasy_csv_legs(path, source_name=source)
                 if effective_filter:
-                    csv_legs = [l for l in csv_legs if (l.sport_id or "") in effective_filter]
+                    csv_legs = [csv_lg for csv_lg in csv_legs if (csv_lg.sport_id or "") in effective_filter]
                 legs.extend(csv_legs)
                 meta["sources"][source] = meta["sources"].get(source, 0) + len(csv_legs)
         except Exception as e:
@@ -213,7 +213,7 @@ def compare_fantasy_vs_sharp(
             )
             pl_legs = fantasy_props_to_legs(fantasy_props)
             if resolved_sport_filter:
-                pl_legs = [l for l in pl_legs if (l.sport_id or "") in resolved_sport_filter]
+                pl_legs = [pl_lg for pl_lg in pl_legs if (pl_lg.sport_id or "") in resolved_sport_filter]
             legs.extend(pl_legs)
             fantasy_meta.setdefault("sources", {})
             fantasy_meta["sources"]["propline_fantasy"] = len(pl_legs)

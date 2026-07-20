@@ -11,7 +11,6 @@ weighted by per-leg probability (heterogeneous exact EV).
 """
 from __future__ import annotations
 import math
-from typing import Optional
 from ud_edge.models import FlexEntryType
 
 

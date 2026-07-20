@@ -1,7 +1,7 @@
 """Pydantic models for legs, options, games, players, and ranked picks."""
 from __future__ import annotations
 from typing import Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 
 class Player(BaseModel):

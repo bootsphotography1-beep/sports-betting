@@ -1,7 +1,5 @@
 """Tests for Wave 3B: project-root-resolved RESULTS_PATH."""
-import pytest
 from pathlib import Path
-import importlib
 
 
 class TestResultsPath:
@@ -21,7 +19,6 @@ class TestResultsPath:
     def test_import_works_from_any_cwd(self, tmp_path):
         """Importing the module works when cwd is not the project root."""
         # Change to a different directory and re-import
-        import sys
         # The key check is that RESULTS_PATH is absolute so it works from any CWD
         from ud_edge.results_tracker import RESULTS_PATH
         assert RESULTS_PATH.is_absolute()

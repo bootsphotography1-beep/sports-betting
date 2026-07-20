@@ -125,7 +125,7 @@ def self_test() -> int:
 def dry_run() -> int:
     print("Running dry-run pipeline with synthetic data...\n")
 
-    from ud_edge.models import Leg, RankedLeg
+    from ud_edge.models import Leg
 
     # Synthetic: 4 NBA legs, all with +EV over (favored over)
     legs = [
@@ -184,7 +184,7 @@ def run_once(
             from ud_edge.apisports_client import APISportsClient
             api = APISportsClient(cache_path=cache_path.parent / "apisports_cache")
             status = api.status()
-            requests_left = status.get("requests", {}).get("limit_day", "?") - \
+            status.get("requests", {}).get("limit_day", "?") - \
                            status.get("requests", {}).get("current", 0)
             print(f"[apisports] plan={status.get('subscription', {}).get('plan', '?')} "
                   f"requests_today={status.get('requests', {}).get('current', '?')}/"
@@ -491,8 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         from ud_edge.stale_pricing import (
             SnapshotStore, capture_underdog, capture_from_observations,
             detect_movements, detect_stale_opportunities,
-            build_stale_report, build_movement_report,
-            utc_now,
+            build_stale_report, utc_now,
         )
         db_path = Path(args.snapshot_db)
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -540,7 +539,8 @@ def main(argv: list[str] | None = None) -> int:
                 # the sibling prizepicks-edge-bot project). Pass-through
                 # works for clipboard text already in CSV shape; otherwise
                 # we point the user at the dedicated parser.
-                import io, csv as _csv_mod
+                import io
+                import csv as _csv_mod
                 try:
                     for row in _csv_mod.DictReader(io.StringIO(clip_text)):
                         line_raw = (row.get("line") or "").strip()

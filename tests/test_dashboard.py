@@ -1,6 +1,5 @@
 """Tests for copy formatters, sharp side-alignment, and comparison helpers."""
 from __future__ import annotations
-import pytest
 
 from ud_edge.models import Leg, RankedLeg
 from ud_edge.copy_format import format_one_line, format_block, opportunities_to_dict

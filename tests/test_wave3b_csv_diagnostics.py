@@ -1,7 +1,5 @@
 """Tests for Wave 3B: CSV diagnostics in pp_clipboard."""
-import pytest
 import csv
-import tempfile
 from pathlib import Path
 from ud_edge.pp_clipboard import parse_prizepicks_csv
 
