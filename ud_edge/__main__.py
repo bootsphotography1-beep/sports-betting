@@ -349,7 +349,7 @@ def run_once(
     # shows sharp-aware EV (not fantasy-only) when sharp is matched, and
     # expected_value_per_card (heterogeneous exact) per entry type.
     from ud_edge.matcher import effective_true_prob
-    from ud_edge.flex_math import expected_value_per_card
+    from ud_edge.flex_math import expected_value, expected_value_per_card
     print("\n--- Entry-type comparison (same top legs) ---")
     per_leg = (
         [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in top]
@@ -359,10 +359,23 @@ def run_once(
     for et_name, et in UD_PAYOUTS.items():
         if et.n_legs != effective_n_legs:
             continue
-        # Replicate per_leg for each entry type (same leg set, different payout table)
-        ev, win_prob, med = expected_value_per_card(et, per_leg)
+        # Audit residual v3 (remediation v3): expected_value_per_card requires
+        # exactly n_legs probs. If the slate is thinner than the entry size,
+        # fall back to homogeneous expected_value() so we don't ValueError.
+        if per_leg and len(per_leg) == et.n_legs:
+            ev, win_prob, med = expected_value_per_card(et, per_leg)
+            ev_label = "EV"
+        else:
+            ev, win_prob, med = (
+                expected_value(et, avg_prob) if per_leg else (0, 0, 0)
+            )
+            ev_label = "EV(partial)"  # signals homogeneous fallback
+        # recommend_entry uses a scalar. Pass avg_prob (board-wide mean of
+        # effective probs) — clearly labeled so it can't disagree silently
+        # with the printed per-card EV on mixed-confidence cards.
         rec = recommend_entry(et, avg_prob)
-        print(f"  {et_name:<14}  EV=${ev:+.4f}  win={win_prob:.1%}  med={med:.1f}x  → {rec}")
+        print(f"  {et_name:<14}  {ev_label}=${ev:+.4f}  win={win_prob:.1%}  "
+              f"med={med:.1f}x  avg_prob_on_board={avg_prob:.1%}  → {rec}")
 
     return 0
 

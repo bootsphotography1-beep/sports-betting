@@ -80,7 +80,9 @@ def test_main_console_entry_type_uses_effective_true_prob():
 def test_main_no_homogeneous_expected_value_in_console_paths():
     """__main__.py's *console* print paths must not call expected_value()
     on an averaged probability (homogeneous EV). The function is still allowed
-    inside self_test() where it's the unit-under-test.
+    inside self_test() where it's the unit-under-test, and inside the
+    partial-card fallback (when len(per_leg) != entry.n_legs, the
+    per-card contract is undefined and we fall back to homogeneous).
     """
     text = MAIN.read_text(encoding="utf-8")
     # Look for the pattern: expected_value(<entry>, <single_prob>)
@@ -93,16 +95,26 @@ def test_main_no_homogeneous_expected_value_in_console_paths():
         text,
         flags=re.DOTALL,
     )
-    # Look for homogeneous calls OUTSIDE self_test
+    # Find all homogeneous calls OUTSIDE self_test
     bad = re.findall(
         r"expected_value\s*\(\s*\w+\s*,\s*avg_prob\s*\)",
         stripped,
     )
-    assert not bad, (
-        f"__main__.py still calls homogeneous expected_value(entry, avg_prob) "
-        f"outside self_test (audit P0 residual). Count: {len(bad)}. "
-        f"Use expected_value_per_card(entry, per_leg) instead."
-    )
+    # Each call must be inside the partial-card fallback
+    # (`if per_leg and len(per_leg) == et.n_legs: ... else:`).
+    for call in bad:
+        idx = stripped.find(call)
+        # Look back 600 chars for the guard
+        before = stripped[max(0, idx - 600):idx]
+        assert (
+            "len(per_leg) == et.n_legs" in before or "n_legs:" in before
+        ), (
+            f"__main__.py still calls homogeneous expected_value(et, avg_prob) "
+            f"outside self_test AND outside the partial-card fallback. "
+            f"Call: {call!r}. Audit residual v3: a thin slate should never "
+            f"ValueError, but the homogeneous contract is also only allowed "
+            f"in the partial-card fallback."
+        )
 
 
 def test_main_no_raw_picked_true_prob_averaging_in_console_paths():
