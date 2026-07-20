@@ -268,6 +268,11 @@ def run_once(
     )
     top = top_n_for_entry(ranked, n_legs=effective_n_legs)
 
+    # Guard: exit gracefully when no +EV legs survived
+    if not top:
+        print("no +EV slate today")
+        return 0
+
     print_console_summary(ranked, top_n=effective_n_legs, injury_index=injury_index)
 
     # ── Multi-entry mode: build 3-4 disjoint 6-flexes ──
@@ -300,6 +305,8 @@ def run_once(
 
         # Per-entry EV summary
         print("\n--- Per-entry comparison ---")
+        if not top:
+            print("  (no +EV legs to compare)")
         for i, lineup in enumerate(lineups, 1):
             avg_prob = sum(r.picked_true_prob for r in lineup) / len(lineup)
             ev, win_prob, med = expected_value(entry, avg_prob)
@@ -507,7 +514,11 @@ def main(argv: list[str] | None = None) -> int:
             csv_source = args.csv_source or "prizepicks"
             if csv_path.exists():
                 from ud_edge.pp_clipboard import parse_prizepicks_csv
-                csv_observations = parse_prizepicks_csv(csv_path, source_name=csv_source)
+                result = parse_prizepicks_csv(csv_path, source_name=csv_source)
+                if isinstance(result, tuple):
+                    csv_observations = result[0]
+                else:
+                    csv_observations = result
                 if csv_observations:
                     all_ids = []
                     for obs in csv_observations:

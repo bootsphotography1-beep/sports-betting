@@ -327,8 +327,11 @@ class TestCSVAdapter:
         csv_path = tmp_path / "test_board.csv"
         csv_path.write_text(csv_content)
 
-        observations = parse_prizepicks_csv(csv_path)
+        observations, diag = parse_prizepicks_csv(csv_path)
         assert len(observations) == 2
+        assert diag["parsed"] == 2
+        assert diag["skipped_invalid"] == 0
+        assert diag["skipped_missing_critical"] == 0
 
         obs1 = observations[0]
         assert obs1["player_name"] == "Jayson Tatum"
@@ -358,9 +361,10 @@ class TestCSVAdapter:
         csv_path = tmp_path / "test_skip.csv"
         csv_path.write_text(csv_content)
 
-        observations = parse_prizepicks_csv(csv_path)
+        observations, diag = parse_prizepicks_csv(csv_path)
         assert len(observations) == 1
         assert observations[0]["player_name"] == "Jayson Tatum"
+        assert diag["skipped_missing_critical"] == 3
 
     def test_csv_column_order_is_canonical(self, tmp_path):
         """Canonical column order (as specified) is accepted; extra columns ignored."""
@@ -374,7 +378,7 @@ class TestCSVAdapter:
         csv_path = tmp_path / "test_extra_cols.csv"
         csv_path.write_text(csv_content)
 
-        observations = parse_prizepicks_csv(csv_path)
+        observations, diag = parse_prizepicks_csv(csv_path)
         assert len(observations) == 1
         assert "extra_col" not in observations[0]
 
@@ -758,7 +762,7 @@ class TestDemoSeedFile:
             store = SnapshotStore(db_path=db_path)
             store.init()
 
-            observations = parse_prizepicks_csv(demo_path)
+            observations, _diag = parse_prizepicks_csv(demo_path)
             assert len(observations) >= 2, f"Expected >=2 obs from demo CSV, got {len(observations)}"
 
             sources = set()

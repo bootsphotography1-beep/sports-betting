@@ -24,7 +24,8 @@ __all__ = ["parse_prizepicks_csv", "read_clipboard"]
 def parse_prizepicks_csv(
     csv_path: str | Path,
     source_name: str = "prizepicks",
-) -> list[dict]:
+    strict: bool = False,
+) -> list[dict] | tuple[list[dict], dict]:
     """Parse a PrizePicks-board CSV into observation dicts.
 
     Canonical column vocabulary (in order):
@@ -32,17 +33,20 @@ def parse_prizepicks_csv(
         higher_decimal, lower_decimal, event_title, scheduled_at
 
     Extra columns are ignored.  Rows missing player_name, stat_type, or line
-    are skipped silently.
+    are skipped and counted in the diagnostics dict.
 
-    Returns a list of observation dicts with these keys:
-        player_name, sport_id, stat_name, line_value, match_title,
-        scheduled_at, higher_decimal, lower_decimal, source_line_id, source
+    When strict=False (default): returns (observations, diagnostics_dict) tuple.
+    diagnostics_dict has keys: parsed, skipped_invalid, skipped_missing_critical.
+
+    When strict=True: returns just the observations list (legacy behavior).
     """
     path = Path(csv_path)
     if not path.exists():
-        return []
+        return ([], {"parsed": 0, "skipped_invalid": 0, "skipped_missing_critical": 0}) if not strict else []
 
     observations = []
+    parsed = skipped_invalid = skipped_missing_critical = 0
+
     try:
         with open(path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -51,21 +55,31 @@ def parse_prizepicks_csv(
                 stat_type = row.get("stat_type", "").strip()
                 line_raw = row.get("line", "").strip()
 
-                # Skip rows missing required fields
+                # Track missing critical fields
                 if not player_name or not stat_type or not line_raw:
+                    skipped_missing_critical += 1
                     continue
 
                 # Parse line value
                 line_match = re.search(r"(\d+(?:\.\d+)?)", line_raw)
                 if not line_match:
+                    skipped_invalid += 1
                     continue
-                line_value = float(line_match.group(1))
+                try:
+                    line_value = float(line_match.group(1))
+                except ValueError:
+                    skipped_invalid += 1
+                    continue
 
                 # Parse optional decimal odds
                 higher_raw = row.get("higher_decimal", "").strip()
                 lower_raw = row.get("lower_decimal", "").strip()
-                higher_decimal = float(higher_raw) if higher_raw else 0.0
-                lower_decimal = float(lower_raw) if lower_raw else 0.0
+                try:
+                    higher_decimal = float(higher_raw) if higher_raw else 0.0
+                    lower_decimal = float(lower_raw) if lower_raw else 0.0
+                except ValueError:
+                    higher_decimal = 0.0
+                    lower_decimal = 0.0
 
                 # Normalize stat name to the internal vocabulary
                 stat_name = _normalize_stat(stat_type)
@@ -93,10 +107,19 @@ def parse_prizepicks_csv(
                     # Per-row source from CSV (if present), else the default source_name
                     "source": row.get("source", "").strip() or source_name,
                 })
+                parsed += 1
     except Exception:
         pass
 
-    return observations
+    diagnostics = {
+        "parsed": parsed,
+        "skipped_invalid": skipped_invalid,
+        "skipped_missing_critical": skipped_missing_critical,
+    }
+
+    if strict:
+        return observations
+    return observations, diagnostics
 
 
 # ─── Internal helpers ────────────────────────────────────────────────────────

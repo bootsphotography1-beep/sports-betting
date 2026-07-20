@@ -20,7 +20,8 @@ from typing import Optional
 from ud_edge.models import RankedLeg, Leg
 
 
-RESULTS_PATH = Path("data/results.json")
+# Project-root-resolved path: works from any CWD
+RESULTS_PATH = Path(__file__).resolve().parent.parent / "data" / "results.json"
 STALE_DAYS = 14
 
 
