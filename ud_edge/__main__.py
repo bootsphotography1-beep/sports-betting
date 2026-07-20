@@ -311,16 +311,25 @@ def run_once(
             print(f"[results] logging skipped (error: {e})")
 
         # Per-entry EV summary
+        # Audit P0 residual (remediation v3): use effective_true_prob (sharp when
+        # matched) and expected_value_per_card (heterogeneous exact) so the
+        # console board agrees with /api/lineups and the Markdown deliver.
+        from ud_edge.matcher import effective_true_prob
+        from ud_edge.flex_math import expected_value_per_card
         print("\n--- Per-entry comparison ---")
         if not top:
             print("  (no +EV legs to compare)")
         for i, lineup in enumerate(lineups, 1):
-            avg_prob = sum(r.picked_true_prob for r in lineup) / len(lineup)
-            ev, win_prob, med = expected_value(entry, avg_prob)
-            avg_min_leg = min(r.picked_true_prob for r in lineup)
-            print(f"  Entry #{i}: avg {avg_prob:.2%} (floor {avg_min_leg:.2%}) · "
+            per_leg = [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup]
+            avg_prob = sum(per_leg) / len(per_leg)
+            ev, win_prob, med = expected_value_per_card(entry, per_leg)
+            floor_prob = min(per_leg)
+            print(f"  Entry #{i}: avg {avg_prob:.2%} (floor {floor_prob:.2%}) · "
                   f"EV={ev:+.4f} · win={win_prob:.1%} · med={med:.1f}x")
         return 0
+
+        return 0
+
 
     # ── Single-entry mode (legacy default) ──
     report = build_report(
@@ -336,15 +345,22 @@ def run_once(
         print(f"\n[main] report saved to {save_path}")
 
     # Print entry-type EV summary across all matching entry types
+    # Audit P0 residual (remediation v3): use effective_true_prob so the board
+    # shows sharp-aware EV (not fantasy-only) when sharp is matched, and
+    # expected_value_per_card (heterogeneous exact) per entry type.
+    from ud_edge.matcher import effective_true_prob
+    from ud_edge.flex_math import expected_value_per_card
     print("\n--- Entry-type comparison (same top legs) ---")
-    avg_prob = (
-        sum(r.picked_true_prob for r in top) / len(top)
-        if top else 0
+    per_leg = (
+        [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in top]
+        if top else []
     )
+    avg_prob = (sum(per_leg) / len(per_leg)) if per_leg else 0
     for et_name, et in UD_PAYOUTS.items():
         if et.n_legs != effective_n_legs:
             continue
-        ev, win_prob, med = expected_value(et, avg_prob)
+        # Replicate per_leg for each entry type (same leg set, different payout table)
+        ev, win_prob, med = expected_value_per_card(et, per_leg)
         rec = recommend_entry(et, avg_prob)
         print(f"  {et_name:<14}  EV=${ev:+.4f}  win={win_prob:.1%}  med={med:.1f}x  → {rec}")
 
