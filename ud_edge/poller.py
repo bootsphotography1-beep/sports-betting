@@ -95,6 +95,13 @@ def _alert_mispriced(mispriced: list[RankedLeg], now: datetime, min_alert_pp: fl
             # Only alert on legs with meaningful sharp true probability
             continue
         leg = r.leg
+        # Guard malformed alerts (audit 2026-07-20): never push player="Unknown"
+        # or line=0.0 from parser gaps / empty PropLine fantasy rows.
+        player = (leg.player_name or "").strip()
+        if not player or player.lower() == "unknown":
+            continue
+        if leg.line_value is None or float(leg.line_value) == 0.0:
+            continue
         alert_key = f"{leg.player_id}|{leg.stat_name}|{r.picked_side}|{leg.line_value}"
         if not should_alert(
             alert_key,
@@ -107,7 +114,7 @@ def _alert_mispriced(mispriced: list[RankedLeg], now: datetime, min_alert_pp: fl
         # no source attached (e.g. legacy/manual entry).
         platform = (leg.fantasy_source or "Unknown").replace("_", " ").title()
         fired = notify_opportunity(
-            player=leg.player_name,
+            player=player,
             pick=_fmt_side(leg, r.picked_side),
             match=leg.match_title or "—",
             ud_pct=r.picked_true_prob,

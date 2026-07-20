@@ -102,24 +102,54 @@ class PropLineClient:
         # increment (we already paid for them earlier in the same window).
         self.calls_made: int = 0
 
+    def _cache_file(self, cache_key: str) -> Optional[Path]:
+        if not self.cache_path or not cache_key:
+            return None
+        return self.cache_path / f"propline_{cache_key}.json"
+
+    def _read_cache_file(self, cache_file: Path) -> object:
+        return json.loads(cache_file.read_text(encoding="utf-8"))
+
     def _get(self, path: str, params: Optional[dict] = None, cache_key: str = "") -> object:
+        """GET with TTL cache + stale-on-failure fallback.
+
+        Audit P1 #8: previously we only served cache when fresh (< ttl_seconds).
+        On HTTP 429/5xx after TTL expiry the on-disk files were ignored, so a
+        rate-limit day produced sharp_meta.count=0 even with a full sharp_cache/.
+        Now: prefer fresh cache → try HTTP → on failure return stale cache if
+        present (and log), else re-raise.
+        """
         params = dict(params or {})
         params["apiKey"] = self.api_key
-        if self.cache_path and cache_key:
-            cache_file = self.cache_path / f"propline_{cache_key}.json"
-            if cache_file.exists() and (time.time() - cache_file.stat().st_mtime) < self.ttl_seconds:
-                # Cache hit — do NOT count as a billable call.
-                return json.loads(cache_file.read_text())
+        cache_file = self._cache_file(cache_key)
+
+        if cache_file is not None and cache_file.exists():
+            age = time.time() - cache_file.stat().st_mtime
+            if age < self.ttl_seconds:
+                # Fresh cache hit — do NOT count as a billable call.
+                return self._read_cache_file(cache_file)
+
         url = f"{self.BASE}{path}"
-        r = self.session.get(url, params=params, timeout=25)
-        r.raise_for_status()
-        data = r.json()
+        try:
+            r = self.session.get(url, params=params, timeout=25)
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            # Audit P1 #8: serve stale cache rather than empty indexes.
+            if cache_file is not None and cache_file.exists():
+                age_m = (time.time() - cache_file.stat().st_mtime) / 60.0
+                print(
+                    f"[propline] HTTP failed ({e}); serving stale cache "
+                    f"{cache_file.name} (age {age_m:.1f}m)"
+                )
+                return self._read_cache_file(cache_file)
+            raise
+
         # Real HTTP call — increment the counter.
         self.calls_made += 1
-        if self.cache_path and cache_key:
+        if cache_file is not None:
             self.cache_path.mkdir(parents=True, exist_ok=True)
-            cache_file = self.cache_path / f"propline_{cache_key}.json"
-            cache_file.write_text(json.dumps(data))
+            cache_file.write_text(json.dumps(data), encoding="utf-8")
         return data
 
     def list_sports(self) -> list[dict]:
@@ -315,6 +345,122 @@ def _american_or_decimal_to_decimal(price) -> Optional[float]:
     return _to_decimal(price)
 
 
+# Reverse map: PropLine sport_key → UD sport id (NBA/MLB/…)
+_SPORT_KEY_TO_ID: dict[str, str] = {v: k for k, v in SPORT_KEYS.items()}
+
+
+def _sport_id_from_detail(detail: dict, fallback: str = "UNK") -> str:
+    """Infer UD sport id from an odds payload or filename fragment."""
+    key = (detail.get("sport_key") or "").strip().lower()
+    if key in _SPORT_KEY_TO_ID:
+        return _SPORT_KEY_TO_ID[key]
+    return fallback
+
+
+def _props_to_indexes(
+    props: list[dict],
+    *,
+    sharp_index: dict[str, dict],
+    fantasy_props: list[dict],
+) -> None:
+    """Merge flat prop dicts into sharp_index + fantasy_props (mutates both)."""
+    from ud_edge.sharp_books_client import sharp_lookup_key
+
+    for p in props:
+        if not p.get("over_decimal") or not p.get("under_decimal"):
+            continue
+        if p.get("book_type") == "fantasy":
+            fantasy_props.append(p)
+            continue
+        player = (p.get("player") or "").strip()
+        if not player:
+            continue
+        # Key shape matches legacy build_propline_indexes (player|stat, no event)
+        # so find_sharp_match fuzzy path keeps working unchanged.
+        key = sharp_lookup_key(player, p["stat"])
+        # Prefer higher-priority sharp books (already ordered in parse)
+        if key in sharp_index:
+            continue
+        sharp_index[key] = {
+            "over_decimal": p["over_decimal"],
+            "under_decimal": p["under_decimal"],
+            "bookmaker": p["bookmaker"],
+            "line_value": p["line"],
+            "player_name": player,
+            "stat_name": canonicalize_stat(p["stat"]),
+            "sport_id": p.get("sport_id") or "UNK",
+            "source": p.get("source") or f"propline-{p.get('bookmaker', 'sharp')}",
+            "event_title": p.get("event"),
+            "captured_at": p.get("commence"),
+        }
+
+
+def load_cached_indexes(
+    cache_path: Optional[Path] = None,
+    sports: Optional[list[str]] = None,
+) -> tuple[dict[str, dict], list[dict], dict]:
+    """Rebuild sharp + fantasy indexes from on-disk PropLine cache files.
+
+    Audit P1 #8: used when the live API is unavailable (429 / outage) or when
+    no PROPLINE_API_KEY is set but `data/sharp_cache/propline_odds_*.json`
+    already exists from an earlier successful pull.
+
+    Does not require an API key. Ignores TTL — any readable odds file is used.
+    """
+    meta: dict = {
+        "count_sharp": 0,
+        "count_fantasy": 0,
+        "sources": [],
+        "errors": [],
+        "propline_calls": 0,
+        "from_cache": True,
+    }
+    if cache_path is None or not Path(cache_path).exists():
+        meta["errors"].append("cache_path missing or empty")
+        return {}, [], meta
+
+    cache_path = Path(cache_path)
+    sport_filter = set(sports) if sports else None
+    sharp_index: dict[str, dict] = {}
+    fantasy_props: list[dict] = []
+    n_files = 0
+
+    for path in sorted(cache_path.glob("propline_odds_*.json")):
+        try:
+            detail = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            meta["errors"].append(f"{path.name}: {e}")
+            continue
+        if not isinstance(detail, dict):
+            continue
+        # Filename: propline_odds_{sport_key}_{event_id}_{markets…}.json
+        # sport_key itself has underscores; prefer payload sport_key.
+        sport_id = _sport_id_from_detail(detail)
+        if sport_id == "UNK":
+            # Best-effort parse from filename prefix after 'propline_odds_'
+            rest = path.name[len("propline_odds_") :]
+            for key, sid in _SPORT_KEY_TO_ID.items():
+                if rest.startswith(key + "_"):
+                    sport_id = sid
+                    break
+        if sport_filter is not None and sport_id not in sport_filter:
+            continue
+        props = parse_event_odds(detail, sport_id)
+        _props_to_indexes(props, sharp_index=sharp_index, fantasy_props=fantasy_props)
+        n_files += 1
+
+    meta["count_sharp"] = len(sharp_index)
+    meta["count_fantasy"] = len(fantasy_props)
+    meta["sources"] = sorted({
+        *(v.get("source", "propline-cache") for v in sharp_index.values()),
+        *(p.get("source", "propline-cache") for p in fantasy_props),
+    })
+    meta["cache_files_loaded"] = n_files
+    if n_files == 0:
+        meta["errors"].append("no propline_odds_*.json files loaded")
+    return sharp_index, fantasy_props, meta
+
+
 def build_propline_indexes(
     api_key: Optional[str] = None,
     sports: Optional[list[str]] = None,
@@ -326,9 +472,10 @@ def build_propline_indexes(
       sharp_index: {norm_player|stat: sharp odds dict}
       fantasy_props: list of fantasy-book prop dicts (prizepicks/underdog/sleeper)
       meta: counts / sources / errors
-    """
-    from ud_edge.sharp_books_client import sharp_lookup_key
 
+    Audit P1 #8: when the live pull yields an empty sharp index (rate-limit /
+    outage) but cache_path has odds files, fall back to load_cached_indexes.
+    """
     meta: dict = {"count_sharp": 0, "count_fantasy": 0, "sources": [], "errors": []}
     sports = sports or ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"]
     sharp_index: dict[str, dict] = {}
@@ -338,6 +485,9 @@ def build_propline_indexes(
         client = PropLineClient(api_key=api_key, cache_path=cache_path)
     except Exception as e:
         meta["errors"].append(str(e))
+        # No client (missing key) — still try disk cache.
+        if cache_path:
+            return load_cached_indexes(cache_path=cache_path, sports=sports)
         return {}, [], meta
 
     # Audit P1 #4: snapshot the counter so we can report how many real HTTP
@@ -352,26 +502,7 @@ def build_propline_indexes(
         except Exception as e:
             meta["errors"].append(f"{sport}: {e}")
             continue
-        for p in props:
-            if not p.get("over_decimal") or not p.get("under_decimal"):
-                continue
-            if p.get("book_type") == "fantasy":
-                fantasy_props.append(p)
-                continue
-            key = sharp_lookup_key(p["player"], p["stat"])
-            # Prefer higher-priority sharp books (already ordered in parse)
-            if key in sharp_index:
-                continue
-            sharp_index[key] = {
-                "over_decimal": p["over_decimal"],
-                "under_decimal": p["under_decimal"],
-                "bookmaker": p["bookmaker"],
-                "line_value": p["line"],
-                "player_name": p["player"],
-                "stat_name": canonicalize_stat(p["stat"]),
-                "sport_id": p.get("sport_id") or sport,
-                "source": p.get("source") or f"propline-{sport}",
-            }
+        _props_to_indexes(props, sharp_index=sharp_index, fantasy_props=fantasy_props)
 
     meta["count_sharp"] = len(sharp_index)
     meta["count_fantasy"] = len(fantasy_props)
@@ -382,15 +513,43 @@ def build_propline_indexes(
     # How many billable HTTP calls happened during this build. The poller
     # reads this and calls budget.record(meta["propline_calls"]) accordingly.
     meta["propline_calls"] = client.calls_made - start_calls
+
+    # Audit P1 #8: empty live result + cache on disk → load stale indexes.
+    if not sharp_index and cache_path:
+        cached_sharp, cached_fantasy, cached_meta = load_cached_indexes(
+            cache_path=cache_path, sports=sports
+        )
+        if cached_sharp or cached_fantasy:
+            meta["errors"].append(
+                "live PropLine returned no sharp props; served sharp_cache fallback"
+            )
+            meta["from_cache"] = True
+            meta["cache_files_loaded"] = cached_meta.get("cache_files_loaded", 0)
+            meta["errors"].extend(cached_meta.get("errors") or [])
+            return cached_sharp, cached_fantasy, meta
+
     return sharp_index, fantasy_props, meta
 
 
 def fantasy_props_to_legs(fantasy_props: list[dict]):
-    """Convert PropLine fantasy props into Leg objects for ranking."""
+    """Convert PropLine fantasy props into Leg objects for ranking.
+
+    Skips malformed rows (missing player / line) so alerts never fire as
+    player='Unknown' line=0.0 from parser gaps.
+    """
     from ud_edge.models import Leg
 
     legs = []
     for i, p in enumerate(fantasy_props):
+        player = (p.get("player") or "").strip()
+        if not player:
+            continue
+        if p.get("line") is None:
+            continue
+        try:
+            line_value = float(p["line"])
+        except (TypeError, ValueError):
+            continue
         higher = float(p.get("over_decimal") or 0)
         lower = float(p.get("under_decimal") or 0)
         if higher <= 1.0:
@@ -402,12 +561,12 @@ def fantasy_props_to_legs(fantasy_props: list[dict]):
             Leg(
                 line_id=f"propline-{source}-{i}",
                 player_id=f"propline-{source}-p{i}",
-                player_name=p.get("player") or "Unknown",
+                player_name=player,
                 sport_id=(p.get("sport_id") or "UNK").upper(),
                 match_title=p.get("event"),
                 scheduled_at=p.get("commence"),
                 stat_name=canonicalize_stat(p.get("stat") or "points"),
-                line_value=float(p.get("line") or 0),
+                line_value=line_value,
                 line_type="balanced",
                 higher_american=-110,
                 higher_decimal=higher,

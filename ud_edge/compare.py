@@ -212,29 +212,60 @@ def compare_fantasy_vs_sharp(
     )
 
     # Single PropLine pull → sharp index + fantasy boards (PP/UD/Sleeper)
+    # Audit P1 #8: always attempt PropLine (live or disk cache). Missing key
+    # still loads sharp_cache via load_cached_indexes so a 429 day / no-key
+    # laptop can emit mispriced legs from yesterday's pull.
     pl_key = os.environ.get("PROPLINE_API_KEY", "")
     pl_sharp: dict = {}
-    if pl_key:
-        try:
-            from ud_edge.propline_client import build_propline_indexes, fantasy_props_to_legs
+    pl_meta: dict = {}
+    fantasy_props: list = []
+    sharp_cache_path = data_dir / "sharp_cache"
+    try:
+        from ud_edge.propline_client import (
+            build_propline_indexes,
+            fantasy_props_to_legs,
+            load_cached_indexes,
+        )
+        if pl_key:
             pl_sharp, fantasy_props, pl_meta = build_propline_indexes(
                 api_key=pl_key,
                 sports=sports_list,
-                cache_path=data_dir / "sharp_cache",
+                cache_path=sharp_cache_path,
             )
-            pl_legs = fantasy_props_to_legs(fantasy_props)
-            if resolved_sport_filter:
-                pl_legs = [pl_lg for pl_lg in pl_legs if (pl_lg.sport_id or "") in resolved_sport_filter]
-            legs.extend(pl_legs)
-            fantasy_meta.setdefault("sources", {})
-            fantasy_meta["sources"]["propline_fantasy"] = len(pl_legs)
-            for src in sorted({p.get("bookmaker", "?") for p in fantasy_props}):
-                fantasy_meta["sources"][f"propline-{src}"] = sum(
-                    1 for p in fantasy_props if p.get("bookmaker") == src
+        else:
+            pl_sharp, fantasy_props, pl_meta = load_cached_indexes(
+                cache_path=sharp_cache_path,
+                sports=sports_list,
+            )
+            if pl_sharp or fantasy_props:
+                fantasy_meta.setdefault("errors", []).append(
+                    "PROPLINE_API_KEY unset; served sharp_cache fallback"
                 )
-            fantasy_meta.setdefault("errors", []).extend(pl_meta.get("errors", []))
-        except Exception as e:
-            fantasy_meta.setdefault("errors", []).append(f"propline: {e}")
+        # If live path returned nothing usable, try disk once more.
+        if not pl_sharp and sharp_cache_path.exists():
+            cached_sharp, cached_fantasy, cached_meta = load_cached_indexes(
+                cache_path=sharp_cache_path,
+                sports=sports_list,
+            )
+            if cached_sharp or cached_fantasy:
+                pl_sharp, fantasy_props = cached_sharp, cached_fantasy
+                pl_meta = {**pl_meta, **cached_meta, "from_cache": True}
+                fantasy_meta.setdefault("errors", []).append(
+                    "live PropLine empty; served sharp_cache fallback"
+                )
+        pl_legs = fantasy_props_to_legs(fantasy_props)
+        if resolved_sport_filter:
+            pl_legs = [pl_lg for pl_lg in pl_legs if (pl_lg.sport_id or "") in resolved_sport_filter]
+        legs.extend(pl_legs)
+        fantasy_meta.setdefault("sources", {})
+        fantasy_meta["sources"]["propline_fantasy"] = len(pl_legs)
+        for src in sorted({p.get("bookmaker", "?") for p in fantasy_props}):
+            fantasy_meta["sources"][f"propline-{src}"] = sum(
+                1 for p in fantasy_props if p.get("bookmaker") == src
+            )
+        fantasy_meta.setdefault("errors", []).extend(pl_meta.get("errors", []))
+    except Exception as e:
+        fantasy_meta.setdefault("errors", []).append(f"propline: {e}")
 
     sharp_index, sharp_meta = collect_sharp_index(
         data_dir=data_dir,
@@ -249,11 +280,13 @@ def compare_fantasy_vs_sharp(
             *sharp_meta.get("sources", []),
             *(v.get("source", "propline") for v in pl_sharp.values()),
         })
+        if pl_meta.get("from_cache"):
+            sharp_meta["from_cache"] = True
+            sharp_meta["cache_files_loaded"] = pl_meta.get("cache_files_loaded", 0)
     # Audit P1 #4: surface the actual PropLine HTTP-call count so the poller
     # can advance its budget by the real number (was hard-coded to 1 before,
     # under-counting cycles that hit ~60-80 endpoints for 6 sports).
-    if pl_key:
-        sharp_meta["propline_calls"] = pl_meta.get("propline_calls", 0)
+    sharp_meta["propline_calls"] = int(pl_meta.get("propline_calls", 0) or 0)
 
     # Audit P1 #6 (remediation v3): forward line_tolerance so the dashboard /
     # poller / API all use the operator's chosen value instead of the module
