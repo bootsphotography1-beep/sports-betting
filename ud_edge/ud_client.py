@@ -194,6 +194,7 @@ class UDClient:
                     lower_american=int(lower["american_price"]),
                     lower_decimal=float(lower["decimal_price"]),
                     lower_multiplier=float(lower.get("payout_multiplier", 0.0)),
+                    fantasy_source="underdog",
                 )
             )
 

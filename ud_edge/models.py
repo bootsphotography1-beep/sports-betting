@@ -96,6 +96,9 @@ class Leg(BaseModel):
     lower_american: int
     lower_decimal: float
     lower_multiplier: float
+    # Source platform where this leg was observed: underdog | prizepicks |
+    # sleeper | etc. "" means unknown (e.g. legacy/manual entry).
+    fantasy_source: str = ""
 
 
 class RankedLeg(BaseModel):

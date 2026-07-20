@@ -24,6 +24,7 @@ def _leg(**kwargs) -> Leg:
         lower_american=135,
         lower_decimal=2.35,
         lower_multiplier=0.95,
+        fantasy_source="underdog",
     )
     defaults.update(kwargs)
     return Leg(**defaults)
@@ -71,7 +72,8 @@ class TestCopyFormat:
 
     def test_opportunities_dict_has_copy_keys(self):
         d = opportunities_to_dict(_ranked())
-        assert set(d["copy"]) >= {"prizepicks", "sleeper", "underdog", "generic"}
+        # Underdog-only leg: only underdog + generic copy keys present
+        assert set(d["copy"]) == {"underdog", "generic"}
         assert d["sport_id"] == "NBA"
         assert "reason" in d
         assert d["reason"]["headline"]

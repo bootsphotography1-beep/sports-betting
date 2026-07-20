@@ -410,6 +410,45 @@ def top_n_for_entry(ranked: list[RankedLeg], n_legs: int) -> list[RankedLeg]:
     return ranked[:n_legs]
 
 
+
+def dedupe_lineups(ranked: list[RankedLeg]) -> list[RankedLeg]:
+    """Remove legs that share the same canonical market, keeping the highest edge.
+
+    Canonical key = (player_name, stat_name, line_value, picked_side, match_title)
+    Case-insensitive and whitespace-tolerant.
+
+    When the same market appears from multiple sources (e.g. Underdog + PrizePicks),
+    the leg with the highest picked_edge_pp is retained.
+
+    Args:
+        ranked: pre-sorted list of RankedLeg (best edge first)
+
+    Returns:
+        list of RankedLeg with no duplicate canonical markets
+    """
+    seen: dict[tuple, RankedLeg] = {}
+
+    for r in ranked:
+        leg = r.leg
+        # Normalize canonical key components
+        player = " ".join(leg.player_name.lower().split())
+        stat = " ".join(leg.stat_name.lower().split())
+        match = " ".join((leg.match_title or "").lower().split())
+        side = r.picked_side.lower()
+
+        key = (player, stat, leg.line_value, side, match)
+
+        if key not in seen:
+            seen[key] = r
+        else:
+            # Keep the one with higher picked_edge_pp
+            if r.picked_edge_pp > seen[key].picked_edge_pp:
+                seen[key] = r
+
+    return list(seen.values())
+
+
+
 def build_lineups(
     ranked: list[RankedLeg],
     n_entries: int = 4,
@@ -442,6 +481,9 @@ def build_lineups(
         raise ValueError(f"n_entries must be >= 1, got {n_entries}")
     if n_legs < 1:
         raise ValueError(f"n_legs must be >= 1, got {n_legs}")
+
+    # Deduplicate canonical markets before building lineups
+    ranked = dedupe_lineups(ranked)
 
     needed = n_entries * n_legs
     if len(ranked) < n_legs:
