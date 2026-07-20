@@ -8,7 +8,7 @@ from ud_edge.matcher import rank_legs, build_lineups
 from ud_edge.deliver import build_multi_report
 from ud_edge.results_tracker import (
     log_picks, settle_pick, print_calibration, calibration_stats,
-    _leg_key, _load, _save, RESULTS_PATH,
+    _leg_key, _load, RESULTS_PATH,
 )
 
 
@@ -146,7 +146,6 @@ class TestFlexMath:
     def test_3_man_power_break_even(self):
         # 3-man-power: 6x payout → break-even = 6^(-1/3) ≈ 0.5503
         # The "54.95%" in published tables is rounded to 2dp from 0.5503
-        import math
         assert abs(UD_PAYOUTS["3-man-power"].break_even - (1/6)**(1/3)) < 0.001
         # The stored value should be the rounded-to-2dp version
         assert abs(UD_PAYOUTS["3-man-power"].break_even - 0.5495) < 0.001
@@ -162,7 +161,6 @@ class TestFlexMath:
         # At the mathematically exact break-even (6^(-1/3) ≈ 0.5503),
         # EV should be ~0 for a power play. The stored 0.5495 is the
         # rounded-to-2dp version, so EV there is slightly negative.
-        import math
         exact_be = (1/6) ** (1/3)
         entry = UD_PAYOUTS["3-man-power"]
         ev_at_exact, _, _ = expected_value(entry, exact_be)
@@ -241,7 +239,7 @@ class TestInjuryClient:
         assert normalize_status("Suspended") == "SUSPENDED"
 
     def test_injury_out_statuses_filters_correctly(self):
-        from ud_edge.matcher import is_player_out, INJURY_OUT_STATUSES
+        from ud_edge.matcher import is_player_out
         from ud_edge.models import Leg
         # Build a tiny index: Jayson Tatum is OUT
         idx = {"NBA": {"jayson tatum": "OUT"}}
@@ -250,7 +248,7 @@ class TestInjuryClient:
                       line_type="balanced",
                       higher_american=-110, higher_decimal=1.91, higher_multiplier=0.95,
                       lower_american=-110, lower_decimal=1.91, lower_multiplier=0.95)
-        leg_dtd = Leg(line_id="2", player_id="p", player_name="Jayson Tatum",
+        Leg(line_id="2", player_id="p", player_name="Jayson Tatum",
                       sport_id="NBA", stat_name="points", line_value=27.5,
                       line_type="balanced",
                       higher_american=-110, higher_decimal=1.91, higher_multiplier=0.95,
@@ -287,14 +285,16 @@ class TestInjuryClient:
 class TestSharpBooksClient:
     def test_manual_csv_load(self, tmp_path):
         from ud_edge.sharp_books_client import ManualSharpBookClient
+        from datetime import datetime, timezone
         csv_path = tmp_path / "sharp.csv"
+        now = datetime.now(timezone.utc).isoformat()
         csv_path.write_text(
-            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker\n"
-            "LeBron James,points,27.5,1.91,1.91,Pinnacle\n"
-            "Jayson Tatum,rebounds,8.5,1.85,1.95,DraftKings\n"
+            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker,captured_at\n"
+            f"LeBron James,points,27.5,1.91,1.91,Pinnacle,{now}\n"
+            f"Jayson Tatum,rebounds,8.5,1.85,1.95,DraftKings,{now}\n"
         )
         client = ManualSharpBookClient(csv_path)
-        idx = client.load()
+        idx, _meta = client.load()
         assert len(idx) == 2
         assert "lebron james|points" in idx
         assert idx["lebron james|points"]["over_decimal"] == 1.91
@@ -311,12 +311,14 @@ class TestSharpBooksClient:
 
     def test_build_sharp_index_with_only_csv(self, tmp_path):
         from ud_edge.sharp_books_client import build_sharp_index
+        from datetime import datetime, timezone
         csv_path = tmp_path / "sharp.csv"
+        now = datetime.now(timezone.utc).isoformat()
         csv_path.write_text(
-            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker\n"
-            "Test Player,points,20.5,1.85,1.95,Pinnacle\n"
+            "player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker,captured_at\n"
+            f"Test Player,points,20.5,1.85,1.95,Pinnacle,{now}\n"
         )
-        idx = build_sharp_index(manual_csv=csv_path, sgo_key=None)
+        idx, _meta = build_sharp_index(manual_csv=csv_path, sgo_key=None)
         assert "test player|points" in idx
         assert idx["test player|points"]["source"] == "manual-csv"
 
@@ -397,14 +399,14 @@ class TestBuildLineups:
         ranked = self._mk_ranked(24)
         lineups = build_lineups(ranked, n_entries=4, n_legs=6)
         assert len(lineups) == 4
-        assert all(len(l) == 6 for l in lineups)
+        assert all(len(lnup) == 6 for lnup in lineups)
 
     def test_lineups_are_disjoint(self):
         ranked = self._mk_ranked(24)
         lineups = build_lineups(ranked, n_entries=4, n_legs=6)
         all_line_ids = []
-        for l in lineups:
-            for r in l:
+        for lnup in lineups:
+            for r in lnup:
                 all_line_ids.append(r.leg.line_id)
         assert len(all_line_ids) == 24
         assert len(set(all_line_ids)) == 24, "expected 24 unique line_ids"
@@ -428,7 +430,7 @@ class TestBuildLineups:
         ranked = self._mk_ranked(12)
         lineups = build_lineups(ranked, n_entries=4, n_legs=6)
         assert len(lineups) == 2, f"expected 2 lineups, got {len(lineups)}"
-        assert all(len(l) == 6 for l in lineups)
+        assert all(len(lnup) == 6 for lnup in lineups)
 
     def test_empty_when_not_enough_for_one_lineup(self):
         """4 legs < 6 needed → 0 lineups (caller handles 'no +EV slate today')."""
@@ -455,7 +457,7 @@ class TestBuildLineups:
         lineups = build_lineups(ranked, n_entries=3, n_legs=6)
         assert len(lineups) == 3
         # 3 × 6 = 18 unique legs
-        all_ids = sum([[r.leg.line_id for r in l] for l in lineups], [])
+        all_ids = sum([[r.leg.line_id for r in lnup] for lnup in lineups], [])
         assert len(set(all_ids)) == 18
 
 
@@ -549,7 +551,7 @@ class TestFullGameOnly:
     def test_full_game_only_drops_midgame(self):
         legs = self._mk_legs()
         ranked_full = rank_legs(legs, break_even=0.524, full_game_only=True)
-        ranked_default = rank_legs(legs, break_even=0.524)
+        rank_legs(legs, break_even=0.524)
         # Default: all 6 may rank (assuming they pass threshold)
         # full_game_only: only 3 should pass (TENNIS sets_played, MLB hits, NBA points)
         ids_full = {r.leg.line_id for r in ranked_full}

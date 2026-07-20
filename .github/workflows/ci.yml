@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, fix/audit-remediation-v2]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Lint + test on Python 3.11
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install project
+        run: uv sync --extra dev --extra dashboard
+
+      - name: Lint (ruff)
+        run: uvx ruff check .
+
+      - name: Tests (pytest)
+        run: uv run --no-sync --with-editable .[dev,dashboard] pytest -q
+
+      - name: Self-test
+        run: uv run --no-sync --with-editable .[dev,dashboard] python -m ud_edge --self-test
+
+      - name: Dry-run
+        run: uv run --no-sync --with-editable .[dev,dashboard] python -m ud_edge --dry-run
+
+      - name: Dashboard smoke
+        run: |
+          uv run --no-sync --with-editable .[dev,dashboard] python -m ud_edge --serve --port 18787 &
+          SERVE_PID=$!
+          sleep 4
+          for path in / /api/health /HONEST_STATUS.md /api/opportunities?entry=bogus /api/opportunities?min_true_prob=nan; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:18787${path}")
+            echo "${path} -> ${code}"
+            if [ "${path}" = "/api/opportunities?entry=bogus" ] || [ "${path}" = "/api/opportunities?min_true_prob=nan" ]; then
+              [ "${code}" = "400" ] || { echo "expected 400 for ${path}"; exit 1; }
+            else
+              [ "${code}" = "200" ] || { echo "expected 200 for ${path}"; exit 1; }
+            fi
+          done
+          kill ${SERVE_PID} || true
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Set up Python
+        run: uv python install 3.11
+      - name: Install project
+        run: uv sync --extra dev --extra dashboard
+      - name: pip-audit
+        run: uvx pip-audit --strict

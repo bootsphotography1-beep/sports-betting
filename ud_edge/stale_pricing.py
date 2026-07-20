@@ -1046,7 +1046,7 @@ def _check_stale_pair(
             return None, 0.0
         # Start from newest
         curr = obs[0]
-        curr_age = age_minutes(curr[5])
+        age_minutes(curr[5])
         # Check if there is ANY meaningful change from newest backwards
         for i in range(1, len(obs)):
             prior = obs[i]
@@ -1153,7 +1153,6 @@ def _check_stale_pair(
         confidence = "low"
 
     # ── Evidence: what to play on stale source ──────────────────────────
-    side_verb = "Over" if direction == "higher" else "Under"
     evidence = (
         f"play {direction} on {src_stale} (line={stale_line:.1f}, "
         f"stale {stale_age:.0f}min unchanged); "

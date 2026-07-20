@@ -27,6 +27,48 @@ import requests
 from ud_edge.models import Leg, Player, Appearance, Game
 
 
+# ── Sport alias map ───────────────────────────────────────────────────────────
+# Maps canonical user-facing sport names to the full set of sport_id values
+# that UD may return for that league.  e.g. UD returns sport_id='BASKETBALL'
+# for WNBA games, so 'WNBA' user filter must also match 'BASKETBALL'.
+ALIASES: dict[str, set[str]] = {
+    "NBA": {"NBA", "BASKETBALL"},
+    "WNBA": {"WNBA", "BASKETBALL"},
+    "BASKETBALL": {"NBA", "BASKETBALL"},
+    "NFL": {"NFL"},
+    "CFB": {"CFB", "NCAAF"},
+    "NCAAF": {"CFB", "NCAAF"},
+    "MLB": {"MLB"},
+    "NHL": {"NHL"},
+    "NCAAB": {"NCAAB"},
+    "PGA": {"PGA"},
+    "MMA": {"MMA"},
+    "SOCCER": {"SOCCER", "SOC"},
+    "MLS": {"MLS", "SOCCER", "SOC"},
+    "EPL": {"EPL", "SOCCER", "SOC"},
+}
+
+
+def resolve_sport_filter(filter_set: Optional[set[str]]) -> set[str]:
+    """Expand a user-supplied sport filter through the alias map.
+
+    e.g. {'NBA'} → {'NBA', 'BASKETBALL'}
+         {'WNBA'} → {'WNBA', 'BASKETBALL'}
+    Returns an empty set if filter_set is None or empty.
+    """
+    if not filter_set:
+        return set()
+    expanded: set[str] = set()
+    for sport in filter_set:
+        normalized = sport.upper()
+        if normalized in ALIASES:
+            expanded.update(ALIASES[normalized])
+        else:
+            # Unknown sport: treat as literal
+            expanded.add(normalized)
+    return expanded
+
+
 UD_LINES_URL = "https://api.underdogfantasy.com/beta/v5/over_under_lines"
 UD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -95,6 +137,8 @@ class UDClient:
         skip_alternates: bool = True,
     ) -> list[Leg]:
         """Flatten the nested UD response into a list of typed Leg objects."""
+        # Resolve sport aliases so e.g. {'NBA'} also matches sport_id='BASKETBALL'
+        resolved_filter = resolve_sport_filter(sport_filter)
         # Index lookup tables
         players_by_id: dict[str, Player] = {
             p["id"]: Player(
@@ -155,7 +199,7 @@ class UDClient:
             if not player:
                 continue
 
-            if sport_filter and player.sport_id not in sport_filter:
+            if resolved_filter and player.sport_id not in resolved_filter:
                 skipped_filtered += 1
                 continue
 
@@ -194,6 +238,7 @@ class UDClient:
                     lower_american=int(lower["american_price"]),
                     lower_decimal=float(lower["decimal_price"]),
                     lower_multiplier=float(lower.get("payout_multiplier", 0.0)),
+                    fantasy_source="underdog",
                 )
             )
 

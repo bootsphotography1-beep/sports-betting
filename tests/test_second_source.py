@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import csv
 import sqlite3
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -41,7 +41,7 @@ def frozen_now():
 class TestCaptureFromObservations:
     def test_no_vig_from_both_sided_decimals(self, tmp_db, frozen_now):
         """Both-sided decimals → no-vig true probabilities stored correctly."""
-        from ud_edge.stale_pricing import capture_from_observations, utc_now
+        from ud_edge.stale_pricing import capture_from_observations
         from ud_edge import stale_pricing
         import datetime as dt_module
 
@@ -169,7 +169,6 @@ class TestCaptureFromObservations:
         """A SQLite-level IntegrityError on row 2 rolls back the entire batch."""
         from ud_edge.stale_pricing import (
             SnapshotStore, capture_from_observations,
-            SnapshotRecord,
         )
         from ud_edge import stale_pricing
         import datetime as dt_module
@@ -327,8 +326,11 @@ class TestCSVAdapter:
         csv_path = tmp_path / "test_board.csv"
         csv_path.write_text(csv_content)
 
-        observations = parse_prizepicks_csv(csv_path)
+        observations, diag = parse_prizepicks_csv(csv_path)
         assert len(observations) == 2
+        assert diag["parsed"] == 2
+        assert diag["skipped_invalid"] == 0
+        assert diag["skipped_missing_critical"] == 0
 
         obs1 = observations[0]
         assert obs1["player_name"] == "Jayson Tatum"
@@ -358,9 +360,10 @@ class TestCSVAdapter:
         csv_path = tmp_path / "test_skip.csv"
         csv_path.write_text(csv_content)
 
-        observations = parse_prizepicks_csv(csv_path)
+        observations, diag = parse_prizepicks_csv(csv_path)
         assert len(observations) == 1
         assert observations[0]["player_name"] == "Jayson Tatum"
+        assert diag["skipped_missing_critical"] == 3
 
     def test_csv_column_order_is_canonical(self, tmp_path):
         """Canonical column order (as specified) is accepted; extra columns ignored."""
@@ -374,7 +377,7 @@ class TestCSVAdapter:
         csv_path = tmp_path / "test_extra_cols.csv"
         csv_path.write_text(csv_content)
 
-        observations = parse_prizepicks_csv(csv_path)
+        observations, diag = parse_prizepicks_csv(csv_path)
         assert len(observations) == 1
         assert "extra_col" not in observations[0]
 
@@ -497,7 +500,6 @@ class TestCrossSourceStaleDetection:
         - draftkings: Tatum 28.5 at t_old, moved to 28.0 at t_now → fresh
         - stale detection should find prizepicks=27.5 < draftkings=28.5 gap=1.0
         """
-        from ud_edge.__main__ import main
         from ud_edge import stale_pricing
         from ud_edge.stale_pricing import (
             SnapshotStore, capture_from_observations,
@@ -726,7 +728,7 @@ class TestDemoSeedFile:
         # Find Tatum row
         tatum_rows = [r for r in rows if "tatum" in r.get("player_name", "").lower()]
         assert tatum_rows, "two_source_demo.csv must contain a Jayson Tatum row"
-        tatum = tatum_rows[0]
+        tatum_rows[0]
 
         # Find draftkings parallel row
         dk_rows = [r for r in rows if r.get("source", "").lower() == "draftkings"
@@ -758,13 +760,13 @@ class TestDemoSeedFile:
             store = SnapshotStore(db_path=db_path)
             store.init()
 
-            observations = parse_prizepicks_csv(demo_path)
+            observations, _diag = parse_prizepicks_csv(demo_path)
             assert len(observations) >= 2, f"Expected >=2 obs from demo CSV, got {len(observations)}"
 
             sources = set()
             for obs in observations:
                 src = obs.get("source", "prizepicks")
-                rows = capture_from_observations(
+                capture_from_observations(
                     [obs], store, source=src, captured_at=frozen_now
                 )
                 sources.add(src)

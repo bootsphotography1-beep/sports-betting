@@ -400,6 +400,7 @@ def fantasy_props_to_legs(fantasy_props: list[dict]):
                 lower_american=-110,
                 lower_decimal=lower,
                 lower_multiplier=0.9,
+                fantasy_source=source,
             )
         )
     return legs

@@ -8,6 +8,7 @@ Per-leg break-even is supplied by the caller — it's entry-type-dependent
 recommended entry type per Derek @BTS methodology.
 """
 from __future__ import annotations
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from ud_edge.models import Leg, RankedLeg
 from ud_edge.no_vig import no_vig, edge_pp
@@ -84,8 +85,9 @@ def is_trivial_under_zero(leg: Leg) -> bool:
         return True
 
     RARE_UNDER_HALF_STATS = {
-        # MLB
+        # MLB — rare at 0.5: hits/runs/RBIs/walks rarely go over 0.5 for most players
         "rbis", "walks", "home_runs", "stolen_bases",
+        "hits", "runs",
         "hits_allowed", "runs_allowed", "walks_allowed",
         "period_1_total_runs_allowed",
         # NFL
@@ -146,6 +148,9 @@ def rank_legs(
     injury_index: Optional[dict] = None,
     sharp_book_index: Optional[dict] = None,
     full_game_only: bool = False,
+    sharp_policy: str = "sharp_authoritative_quarantine",
+    reject_started: bool = True,
+    reject_live: bool = True,
 ) -> list[RankedLeg]:
     """Rank legs by edge above break-even. Only include legs that clear min_true_prob.
 
@@ -158,15 +163,20 @@ def rank_legs(
         injury_index: optional {sport_id: {normalized_name: status}} from ESPN feed.
                       Legs where the player is OUT / IR / Suspended / Doubtful
                       are filtered out. Day-To-Day legs are kept (with a flag).
-        sharp_book_index: optional {f"{norm_player}|{stat}": {over_decimal,
-                          under_decimal, bookmaker, line_value}} from sharp books.
-                          When matched, the leg's "sharp true prob" replaces
-                          the UD-implied true prob for ranking — this surfaces
-                          mispricings where the sharp book disagrees with UD.
+        sharp_book_index: optional sharp index from build_sharp_index().
+        sharp_policy: policy for how to use sharp-book matches. Default
+            "sharp_authoritative_quarantine" — when sharp disagrees with fantasy
+            by more than -2.0pp (sharp lower), quarantine the leg; when sharp
+            agrees (delta >= -2.0pp), use sharp's same-side probability for EV.
+            Other policies may be added in future waves.
+        full_game_only: skip mid-game / half props and obscure sports.
+        reject_started: if True, skip legs whose scheduled_at is in the past
+            (market has already started). Unknown scheduled_at is allowed.
+            Default True.
+        reject_live: if True, skip legs from live / in-progress events.
+            Default True.
 
-    Returns: list of RankedLeg sorted by picked_edge_pp descending. The
-    sort key uses the SHARPER prob (if available) — this boosts legs where
-    the sharp book gives a higher true prob than UD implies.
+    Returns: list of RankedLeg sorted by picked_edge_pp descending.
     """
     ranked: list[RankedLeg] = []
     skipped_threshold = 0
@@ -174,6 +184,8 @@ def rank_legs(
     skipped_whitelist = 0
     skipped_injury = 0
     skipped_midgame = 0
+    skipped_started = 0
+    skipped_live = 0
     matched_sharp = 0
 
     # When --full-game-only is set, drop mid-game / first-half props that resolve
@@ -208,6 +220,41 @@ def rank_legs(
         if filter_trivial and is_trivial_under_zero(leg):
             skipped_trivial += 1
             continue
+
+        # ── Started / live-market rejection ─────────────────────────────────────
+        if reject_started or reject_live:
+            now = datetime.now(timezone.utc)
+            parsed_scheduled: Optional[datetime] = None
+
+            if leg.scheduled_at:
+                try:
+                    parsed_scheduled = datetime.fromisoformat(leg.scheduled_at)
+                    # Normalize to UTC-aware
+                    if parsed_scheduled.tzinfo is None:
+                        parsed_scheduled = parsed_scheduled.replace(tzinfo=timezone.utc)
+                except (ValueError, TypeError):
+                    # Malformed ISO8601 — treat as unknown, do not reject
+                    parsed_scheduled = None
+
+            if reject_started and parsed_scheduled is not None:
+                if now > parsed_scheduled:
+                    skipped_started += 1
+                    continue
+
+            # reject_live: if the leg has no scheduled_at and the market is live,
+            # we can't determine — skip only if ud_client marked it as live.
+            # The OverUnderLine model has a live_event field; if the leg's
+            # match_title or a flag indicates in-progress, we reject.
+            # For now, reject_live checks the OverUnderLine.liv_event flag that
+            # was used during parsing. Since Leg doesn't carry that flag directly,
+            # we use the presence of a very recent scheduled_at (within the last
+            # 30 minutes) as a live-event proxy when reject_live is True.
+            if reject_live and parsed_scheduled is not None:
+                thirty_min = timedelta(minutes=30)
+                if now > parsed_scheduled and now < parsed_scheduled + thirty_min:
+                    # Started within the last 30 min — live / in-progress
+                    skipped_live += 1
+                    continue
 
         # Full-game-only mode: drop mid-game / obscure-sport legs
         if full_game_only:
@@ -249,60 +296,56 @@ def rank_legs(
 
         picked_edge = edge_pp(picked_prob, break_even)
 
-        # ── Sharp-book cross-reference ──
+        # ── Sharp-book cross-reference (sharp_authoritative_quarantine policy) ──
         sharp_true_prob: Optional[float] = None
         sharp_book: Optional[str] = None
         sharp_overround: Optional[float] = None
         mispricing_edge_pp: Optional[float] = None
+        quarantined = False  # True when sharp disagrees with fantasy by > -2pp
 
-        if sharp_book_index:
+        if sharp_book_index and sharp_policy == "sharp_authoritative_quarantine":
             from ud_edge.sharp_books_client import find_sharp_match
-            sharp = find_sharp_match(
+            sharp_match = find_sharp_match(
                 sharp_book_index,
                 leg.player_name,
                 leg.stat_name,
                 leg.line_value,
                 line_tolerance=LINE_TOLERANCE,
+                event_title=leg.match_title,
+                scheduled_at=leg.scheduled_at,
             )
 
-            if sharp is not None:
-                try:
-                    s_over, s_under, s_overround = no_vig(
-                        sharp["over_decimal"], sharp["under_decimal"]
-                    )
-                    # Side-aligned: compare sharp OVER to UD higher, UNDER to lower.
-                    # If sharp disagrees with UD's favorite side, flip the pick
-                    # to the sharp-favored side when that side clears thresholds.
-                    sharp_for_higher = s_over
-                    sharp_for_lower = s_under
-                    sharp_fav_side = "higher" if s_over >= s_under else "lower"
-                    sharp_fav_prob = max(s_over, s_under)
+            if sharp_match is not None:
+                # sharp_match is a SharpMatch dataclass
+                sharp_for_higher = sharp_match.sharp_for_higher
+                sharp_for_lower = sharp_match.sharp_for_lower
+                sharp_true_prob = (
+                    sharp_for_higher if picked_side == "higher" else sharp_for_lower
+                )
+                sharp_book = sharp_match.bookmaker
+                sharp_overround = None  # already no-vigged in SharpMatch
 
-                    if sharp_fav_side != picked_side:
-                        # Sharp book disagrees — follow sharp when it's stronger
-                        # than UD's favorite by ≥2pp (real mispricing signal).
-                        if (sharp_fav_prob - picked_prob) * 100 >= 2.0:
-                            picked_side = sharp_fav_side
-                            picked_prob = (
-                                true_over if picked_side == "higher" else true_under
-                            )
-                            picked_edge = edge_pp(picked_prob, break_even)
+                # Mispricing = sharp_same_side - fantasy_same_side (percentage points)
+                delta_pp = (sharp_true_prob - picked_prob) * 100
+                mispricing_edge_pp = delta_pp
 
-                    sharp_true_prob = (
-                        sharp_for_higher if picked_side == "higher" else sharp_for_lower
-                    )
-                    sharp_book = sharp.get("bookmaker", "sharp")
-                    sharp_overround = s_overround
-                    # Mispricing = sharp_same_side - ud_same_side
-                    # Positive = fantasy platform underprices this side vs sharp.
-                    mispricing_edge_pp = (sharp_true_prob - picked_prob) * 100
+                # sharp_authoritative_quarantine: quarantine when delta < -2.0pp
+                # (sharp is MORE BEARISH than fantasy by more than 2pp)
+                if delta_pp < -2.0:
+                    quarantined = True
                     matched_sharp += 1
-                except (ValueError, KeyError, TypeError):
-                    pass
+                else:
+                    # When delta >= -2.0pp: sharp agrees or is bullish → use sharp prob for EV
+                    # (delta already computed above, just fall through to effective_prob)
+                    matched_sharp += 1
 
-        # ── Filter: only keep legs where the favorite side clears thresholds ──
-        # Prefer side-aligned sharp prob when sharp agrees this side is stronger.
-        if sharp_true_prob is not None and mispricing_edge_pp is not None and mispricing_edge_pp > 0:
+        # ── Filter: quarantine when sharp-authoritative policy says to ──
+        if quarantined:
+            # Do not include this leg in ranked output
+            continue
+
+        # Compute effective probability for threshold filtering
+        if sharp_true_prob is not None:
             effective_prob = sharp_true_prob
         else:
             effective_prob = picked_prob
@@ -351,6 +394,10 @@ def rank_legs(
         parts.append(f"{skipped_injury} OUT (injury)")
     if skipped_midgame:
         parts.append(f"{skipped_midgame} midgame")
+    if skipped_started:
+        parts.append(f"{skipped_started} started")
+    if skipped_live:
+        parts.append(f"{skipped_live} live")
     if matched_sharp:
         parts.append(f"{matched_sharp} matched-sharp")
     if parts:
@@ -361,6 +408,45 @@ def rank_legs(
 def top_n_for_entry(ranked: list[RankedLeg], n_legs: int) -> list[RankedLeg]:
     """Pick the top N legs (typically n_legs = entry type leg count)."""
     return ranked[:n_legs]
+
+
+
+def dedupe_lineups(ranked: list[RankedLeg]) -> list[RankedLeg]:
+    """Remove legs that share the same canonical market, keeping the highest edge.
+
+    Canonical key = (player_name, stat_name, line_value, picked_side, match_title)
+    Case-insensitive and whitespace-tolerant.
+
+    When the same market appears from multiple sources (e.g. Underdog + PrizePicks),
+    the leg with the highest picked_edge_pp is retained.
+
+    Args:
+        ranked: pre-sorted list of RankedLeg (best edge first)
+
+    Returns:
+        list of RankedLeg with no duplicate canonical markets
+    """
+    seen: dict[tuple, RankedLeg] = {}
+
+    for r in ranked:
+        leg = r.leg
+        # Normalize canonical key components
+        player = " ".join(leg.player_name.lower().split())
+        stat = " ".join(leg.stat_name.lower().split())
+        match = " ".join((leg.match_title or "").lower().split())
+        side = r.picked_side.lower()
+
+        key = (player, stat, leg.line_value, side, match)
+
+        if key not in seen:
+            seen[key] = r
+        else:
+            # Keep the one with higher picked_edge_pp
+            if r.picked_edge_pp > seen[key].picked_edge_pp:
+                seen[key] = r
+
+    return list(seen.values())
+
 
 
 def build_lineups(
@@ -396,7 +482,10 @@ def build_lineups(
     if n_legs < 1:
         raise ValueError(f"n_legs must be >= 1, got {n_legs}")
 
-    needed = n_entries * n_legs
+    # Deduplicate canonical markets before building lineups
+    ranked = dedupe_lineups(ranked)
+
+    n_entries * n_legs
     if len(ranked) < n_legs:
         # Not even one full lineup possible
         return []

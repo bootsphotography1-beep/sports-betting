@@ -110,5 +110,5 @@ class TestFantasyPropsToLegs:
         fantasy = [p for p in props if p["book_type"] == "fantasy"]
         legs = fantasy_props_to_legs(fantasy)
         assert len(legs) == len(fantasy)
-        assert all(l.player_name == "Jayson Tatum" for l in legs)
-        assert all(l.higher_decimal > 1.0 for l in legs)
+        assert all(leg.player_name == "Jayson Tatum" for leg in legs)
+        assert all(leg.higher_decimal > 1.0 for leg in legs)

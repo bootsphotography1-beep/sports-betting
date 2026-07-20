@@ -14,8 +14,9 @@ from ud_edge.copy_format import format_block, opportunities_to_dict
 from ud_edge.flex_math import UD_PAYOUTS
 from ud_edge.matcher import rank_legs, build_lineups
 from ud_edge.models import Leg, RankedLeg
+from ud_edge.safety_gate import safety_status
 from ud_edge.sharp_books_client import build_sharp_index
-from ud_edge.ud_client import UDClient
+from ud_edge.ud_client import UDClient, resolve_sport_filter
 
 
 DEFAULT_SPORTS = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB", "MLS", "EPL"]
@@ -29,7 +30,13 @@ def load_fantasy_csv_legs(csv_path: Path, source_name: str = "prizepicks") -> li
     """Convert a PrizePicks/Sleeper-style CSV into Leg objects for ranking."""
     from ud_edge.pp_clipboard import parse_prizepicks_csv
 
-    observations = parse_prizepicks_csv(csv_path, source_name=source_name)
+    result = parse_prizepicks_csv(csv_path, source_name=source_name)
+    # New (non-strict) API: returns (observations, diagnostics) tuple
+    # Old (strict) API: returns list
+    if isinstance(result, tuple):
+        observations = result[0]
+    else:
+        observations = result
     legs: list[Leg] = []
     for i, obs in enumerate(observations):
         higher = float(obs.get("higher_decimal") or 0) or 1.91
@@ -65,6 +72,7 @@ def collect_fantasy_legs(
     *,
     cache_path: Optional[Path] = None,
     sport_filter: Optional[set[str]] = None,
+    resolved_sport_filter: Optional[set[str]] = None,
     fantasy_csvs: Optional[list[tuple[Path, str]]] = None,
     force_fetch: bool = True,
 ) -> tuple[list[Leg], dict]:
@@ -75,6 +83,9 @@ def collect_fantasy_legs(
     root = _project_root()
     cache_path = cache_path or (root / "data" / "ud_lines_cache.json")
     meta = {"sources": {}, "errors": []}
+
+    # Use resolved sport filter if provided; otherwise fall back to raw filter
+    effective_filter = resolved_sport_filter if resolved_sport_filter is not None else sport_filter
 
     legs: list[Leg] = []
     try:
@@ -90,8 +101,8 @@ def collect_fantasy_legs(
         try:
             if path.exists():
                 csv_legs = load_fantasy_csv_legs(path, source_name=source)
-                if sport_filter:
-                    csv_legs = [l for l in csv_legs if (l.sport_id or "") in sport_filter]
+                if effective_filter:
+                    csv_legs = [csv_lg for csv_lg in csv_legs if (csv_lg.sport_id or "") in effective_filter]
                 legs.extend(csv_legs)
                 meta["sources"][source] = meta["sources"].get(source, 0) + len(csv_legs)
         except Exception as e:
@@ -118,7 +129,7 @@ def collect_sharp_index(
     propline_key = None if skip_propline else (os.environ.get("PROPLINE_API_KEY", "") or None)
 
     try:
-        index = build_sharp_index(
+        index, _build_meta = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key,
             sgo_sports=sports if sgo_key else None,
@@ -130,6 +141,8 @@ def collect_sharp_index(
         )
         meta["count"] = len(index)
         meta["sources"] = sorted({v.get("source", "?") for v in index.values()})
+        meta["stale_lines_rejected"] = _build_meta.get("stale_lines_rejected", 0)
+        meta["missing_captured_at"] = _build_meta.get("missing_captured_at", 0)
         return index, meta
     except Exception as e:
         meta["errors"].append(str(e))
@@ -177,6 +190,8 @@ def compare_fantasy_vs_sharp(
                 fantasy_csvs.append((p, source))
 
     sports_list = sorted(sport_filter) if sport_filter else DEFAULT_SPORTS
+    # Resolve sport aliases once so filtering also matches aliased sport_ids
+    resolved_sport_filter = resolve_sport_filter(sport_filter)
 
     legs, fantasy_meta = collect_fantasy_legs(
         cache_path=data_dir / "ud_lines_cache.json",
@@ -197,8 +212,8 @@ def compare_fantasy_vs_sharp(
                 cache_path=data_dir / "sharp_cache",
             )
             pl_legs = fantasy_props_to_legs(fantasy_props)
-            if sport_filter:
-                pl_legs = [l for l in pl_legs if (l.sport_id or "") in sport_filter]
+            if resolved_sport_filter:
+                pl_legs = [pl_lg for pl_lg in pl_legs if (pl_lg.sport_id or "") in resolved_sport_filter]
             legs.extend(pl_legs)
             fantasy_meta.setdefault("sources", {})
             fantasy_meta["sources"]["propline_fantasy"] = len(pl_legs)
@@ -232,6 +247,7 @@ def compare_fantasy_vs_sharp(
         injury_index=injury_index,
         sharp_book_index=sharp_index or None,
         full_game_only=full_game_only,
+        sharp_policy="sharp_authoritative_quarantine",
     )
 
     if mispriced_only:
@@ -289,6 +305,7 @@ def compare_fantasy_vs_sharp(
         "min_edge_pp": min_edge_pp,
         "full_game_only": full_game_only,
         "mispriced_only": mispriced_only,
+        "safety_status": safety_status(),
         "totals": {
             "legs_scanned": len(legs),
             "opportunities": len(ranked),

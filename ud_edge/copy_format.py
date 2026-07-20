@@ -258,6 +258,22 @@ def opportunities_to_dict(r: RankedLeg, break_even: float = 0.524) -> dict:
     """Serialize a RankedLeg for the dashboard JSON API."""
     leg = r.leg
     reason = explain_pick(r, break_even=break_even)
+
+    # Build copy dict only for platforms where the leg was actually observed
+    fantasy_source = leg.fantasy_source or ""
+    available_platforms: list[str] = []
+    copy: dict[str, str] = {}
+
+    if fantasy_source:
+        available_platforms = [fantasy_source]
+        # Only generate copy text for the observed platform
+        copy[fantasy_source] = format_one_line(r, fantasy_source)
+        # Always include generic as a fallback
+        copy["generic"] = format_one_line(r, "generic")
+    else:
+        # Legacy leg with no known source: include generic only
+        copy["generic"] = format_one_line(r, "generic")
+
     return {
         "player_name": leg.player_name,
         "sport_id": leg.sport_id or "UNK",
@@ -284,11 +300,8 @@ def opportunities_to_dict(r: RankedLeg, break_even: float = 0.524) -> dict:
         "is_mispriced": bool(
             r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
         ),
+        "fantasy_source": fantasy_source,
+        "available_copy_platforms": available_platforms,
         "reason": reason,
-        "copy": {
-            "prizepicks": format_one_line(r, "prizepicks"),
-            "sleeper": format_one_line(r, "sleeper"),
-            "underdog": format_one_line(r, "underdog"),
-            "generic": format_one_line(r, "generic"),
-        },
+        "copy": copy,
     }

@@ -181,7 +181,6 @@ class ESPNInjuryClient:
 
 if __name__ == "__main__":
     # Quick smoke test
-    import sys
     client = ESPNInjuryClient(cache_path=Path("data/injury_cache"))
     idx = client.fetch_all_sports()
     for sport, players in idx.items():

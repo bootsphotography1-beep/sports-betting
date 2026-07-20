@@ -125,7 +125,7 @@ def self_test() -> int:
 def dry_run() -> int:
     print("Running dry-run pipeline with synthetic data...\n")
 
-    from ud_edge.models import Leg, RankedLeg
+    from ud_edge.models import Leg
 
     # Synthetic: 4 NBA legs, all with +EV over (favored over)
     legs = [
@@ -184,7 +184,7 @@ def run_once(
             from ud_edge.apisports_client import APISportsClient
             api = APISportsClient(cache_path=cache_path.parent / "apisports_cache")
             status = api.status()
-            requests_left = status.get("requests", {}).get("limit_day", "?") - \
+            status.get("requests", {}).get("limit_day", "?") - \
                            status.get("requests", {}).get("current", 0)
             print(f"[apisports] plan={status.get('subscription', {}).get('plan', '?')} "
                   f"requests_today={status.get('requests', {}).get('current', '?')}/"
@@ -241,7 +241,7 @@ def run_once(
         auto_sports = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB"] if (
             sgo_key or odds_key or propline_key
         ) else None
-        sharp_index = build_sharp_index(
+        sharp_index, _sharp_meta = build_sharp_index(
             manual_csv=sharp_csv if sharp_csv.exists() else None,
             sgo_key=sgo_key or None,
             sgo_sports=auto_sports if sgo_key else None,
@@ -267,6 +267,11 @@ def run_once(
         full_game_only=full_game_only,
     )
     top = top_n_for_entry(ranked, n_legs=effective_n_legs)
+
+    # Guard: exit gracefully when no +EV legs survived
+    if not top:
+        print("no +EV slate today")
+        return 0
 
     print_console_summary(ranked, top_n=effective_n_legs, injury_index=injury_index)
 
@@ -300,6 +305,8 @@ def run_once(
 
         # Per-entry EV summary
         print("\n--- Per-entry comparison ---")
+        if not top:
+            print("  (no +EV legs to compare)")
         for i, lineup in enumerate(lineups, 1):
             avg_prob = sum(r.picked_true_prob for r in lineup) / len(lineup)
             ev, win_prob, med = expected_value(entry, avg_prob)
@@ -484,8 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         from ud_edge.stale_pricing import (
             SnapshotStore, capture_underdog, capture_from_observations,
             detect_movements, detect_stale_opportunities,
-            build_stale_report, build_movement_report,
-            utc_now,
+            build_stale_report, utc_now,
         )
         db_path = Path(args.snapshot_db)
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -507,7 +513,11 @@ def main(argv: list[str] | None = None) -> int:
             csv_source = args.csv_source or "prizepicks"
             if csv_path.exists():
                 from ud_edge.pp_clipboard import parse_prizepicks_csv
-                csv_observations = parse_prizepicks_csv(csv_path, source_name=csv_source)
+                result = parse_prizepicks_csv(csv_path, source_name=csv_source)
+                if isinstance(result, tuple):
+                    csv_observations = result[0]
+                else:
+                    csv_observations = result
                 if csv_observations:
                     all_ids = []
                     for obs in csv_observations:
@@ -529,7 +539,8 @@ def main(argv: list[str] | None = None) -> int:
                 # the sibling prizepicks-edge-bot project). Pass-through
                 # works for clipboard text already in CSV shape; otherwise
                 # we point the user at the dedicated parser.
-                import io, csv as _csv_mod
+                import io
+                import csv as _csv_mod
                 try:
                     for row in _csv_mod.DictReader(io.StringIO(clip_text)):
                         line_raw = (row.get("line") or "").strip()

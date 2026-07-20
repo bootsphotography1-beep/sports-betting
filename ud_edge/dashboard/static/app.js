@@ -98,10 +98,59 @@
       ? `Fantasy ${fantasy} · Sharp ${sources}`
       : `Sharp ${sources}`;
 
+    renderSafetyBanner(data.safety_status);
     renderMethod(data.methodology);
     renderTabs(data.sports || []);
     renderPanels(data.sports || []);
     renderLineups(data.lineups || []);
+  }
+
+  function renderSafetyBanner(status) {
+    const existing = document.getElementById("safety-banner");
+    if (existing) existing.remove();
+    if (!status || !status.is_research_mode) return;
+    const banner = document.createElement("div");
+    banner.id = "safety-banner";
+    banner.className = "safety-banner";
+    banner.setAttribute("role", "alert");
+
+    // Use textContent for all text segments (numeric fields are defensive)
+    const strong = document.createElement("strong");
+    strong.textContent = "\u26A0\uFE0F UNVERIFIED RESEARCH MODE";
+
+    const seg1 = document.createElement("span");
+    seg1.textContent = " \u2014 EV/$ and win% are unverified research estimates. ";
+
+    const seg2 = document.createElement("span");
+    seg2.textContent = "Payout model unverified \u00B7 ";
+    const settledCount = document.createElement("span");
+    settledCount.textContent = String(status.settled_legs_count ?? 0);
+    const seg2b = document.createElement("span");
+    seg2b.textContent = "/" + String(status.min_settled_legs_required ?? 50);
+    const seg2c = document.createElement("span");
+    seg2c.textContent = " settled legs. ";
+
+    const seg3 = document.createElement("span");
+    seg3.textContent = "Do not treat as actionable +EV. See ";
+
+    const link = document.createElement("a");
+    link.setAttribute("href", "/HONEST_STATUS.md");
+    link.textContent = "HONEST_STATUS.md";
+
+    const seg4 = document.createElement("span");
+    seg4.textContent = " for full safety case.";
+
+    banner.appendChild(strong);
+    banner.appendChild(seg1);
+    banner.appendChild(seg2);
+    seg2.appendChild(settledCount);
+    seg2.appendChild(seg2b);
+    seg2.appendChild(seg2c);
+    banner.appendChild(seg3);
+    banner.appendChild(link);
+    banner.appendChild(seg4);
+
+    document.querySelector(".hero")?.appendChild(banner);
   }
 
   function renderMethod(method) {

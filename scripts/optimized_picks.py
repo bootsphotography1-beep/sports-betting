@@ -33,11 +33,11 @@ legs = c.parse_legs(data, sport_filter=None)
 
 # Filter: drop excluded sports and stats
 filtered = [
-    l for l in legs
-    if l.sport_id not in EXCLUDE_SPORTS
-    and l.stat_name not in EXCLUDE_STATS
-    and l.line_value > 0.5  # drop 0.0 lines (excluded by matcher but double-check)
-    and not (l.line_value == 0.5 and l.stat_name in EXCLUDE_STATS)
+    leg for leg in legs
+    if leg.sport_id not in EXCLUDE_SPORTS
+    and leg.stat_name not in EXCLUDE_STATS
+    and leg.line_value > 0.5  # drop 0.0 lines (excluded by matcher but double-check)
+    and not (leg.line_value == 0.5 and leg.stat_name in EXCLUDE_STATS)
 ]
 print(f'Raw: {len(legs)} → Filtered: {len(filtered)} (dropped {len(legs)-len(filtered)} low-quality)')
 
