@@ -54,6 +54,10 @@ def test_poller_passes_return_ranked_true(tmp_path: Path, monkeypatch):
     from ud_edge import poller
     from ud_edge.budget import CallBudget
 
+    # Audit remediation (test hygiene): bypass the PROPLINE_API_KEY early-return
+    # so our stubbed compare_fantasy_vs_sharp is actually invoked.
+    monkeypatch.setenv("PROPLINE_API_KEY", "testkey-not-real")
+
     captured = {"return_ranked": None}
 
     def fake_compare(**kwargs):
@@ -81,6 +85,9 @@ def test_poller_uses_returned_ranked_list_not_flat(tmp_path: Path, monkeypatch):
     """
     from ud_edge import poller
     from ud_edge.budget import CallBudget
+
+    # Audit remediation (test hygiene): bypass the PROPLINE_API_KEY early-return.
+    monkeypatch.setenv("PROPLINE_API_KEY", "testkey-not-real")
 
     live_ranked = [_make_ranked_with_extras() for _ in range(3)]
 
@@ -130,6 +137,9 @@ def test_poller_preserves_sharp_book_on_alerts(tmp_path: Path, monkeypatch):
     """
     from ud_edge import poller
     from ud_edge.budget import CallBudget
+
+    # Audit remediation (test hygiene): bypass the PROPLINE_API_KEY early-return.
+    monkeypatch.setenv("PROPLINE_API_KEY", "testkey-not-real")
 
     live_ranked = [_make_ranked_with_extras() for _ in range(2)]
     # Make them mispriced

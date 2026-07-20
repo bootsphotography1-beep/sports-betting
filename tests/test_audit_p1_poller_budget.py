@@ -121,6 +121,12 @@ def test_poller_records_actual_propline_calls(tmp_path: Path, monkeypatch):
     from ud_edge import poller
     from ud_edge.budget import CallBudget
 
+    # Audit remediation (test hygiene): the production early-return at
+    # poller.py:_run_poll_cycle aborts when PROPLINE_API_KEY is unset, before
+    # our stubbed compare_fantasy_vs_sharp is called. Set a sentinel so the
+    # gate passes and the stub is reached.
+    monkeypatch.setenv("PROPLINE_API_KEY", "testkey-not-real")
+
     budget = CallBudget(path=tmp_path / "budget.json", daily_limit=5000)
     start_used = budget.snapshot().used
 
@@ -157,6 +163,10 @@ def test_poller_records_zero_when_no_propline_calls(tmp_path: Path, monkeypatch)
     """
     from ud_edge import poller
     from ud_edge.budget import CallBudget
+
+    # Audit remediation (test hygiene): see test_poller_records_actual_propline_calls.
+    # Need to bypass the early-return gate so the stub is reachable.
+    monkeypatch.setenv("PROPLINE_API_KEY", "testkey-not-real")
 
     budget = CallBudget(path=tmp_path / "budget.json", daily_limit=5000)
     start_used = budget.snapshot().used
