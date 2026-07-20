@@ -500,3 +500,14 @@ def build_lineups(
         end = start + n_legs
         lineups.append(ranked[start:end])
     return lineups
+
+def effective_true_prob(picked_prob: float, sharp_true_prob: float | None) -> float:
+    """Return the best available true probability for a leg.
+
+    Uses sharp_prob when it dominates (sharp_authoritative_quarantine policy:
+    sharp agrees or is bullish — delta >= -2.0pp); falls back to UD's own
+    no-vig probability when sharp is unavailable or divergent.
+    """
+    if sharp_true_prob is not None:
+        return sharp_true_prob
+    return picked_prob

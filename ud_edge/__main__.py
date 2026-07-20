@@ -413,6 +413,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="Read the PrizePicks board from the Windows clipboard and ingest it.")
     parser.add_argument("--serve", action="store_true",
                         help="Launch the Edge Board white dashboard (FastAPI) on --host/--port.")
+    parser.add_argument("--poll", action="store_true",
+                        help="Run the adaptive PropLine poller continuously (Ctrl-C to stop).")
+    parser.add_argument("--poll-once", action="store_true",
+                        help="Run one poll cycle and exit. Use to verify configuration.")
+    parser.add_argument("--propline-budget", type=int, default=5000,
+                        help="PropLine daily call cap (default 5000).")
+    parser.add_argument("--alert-pp", type=float, default=1.5,
+                        help="Minimum same-side mispricing (pp) to push an alert (default 1.5).")
     parser.add_argument("--host", type=str, default="127.0.0.1",
                         help="Dashboard bind host (default 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8787,
@@ -603,6 +611,23 @@ def main(argv: list[str] | None = None) -> int:
             save_path.write_text(stale_report)
             print(f"[stale] report saved to {save_path}")
         return 0
+
+    if args.poll or args.poll_once:
+            from ud_edge.poller import run_poll_loop
+            cache_arg = Path(args.cache)
+            # If cache_arg points at a file (e.g. data/ud_lines_cache.json),
+            # use its parent directory so we don't accidentally try to mkdir
+            # inside a file. This makes the poller resilient to both shapes.
+            if cache_arg.is_file() or cache_arg.suffix:
+                cache_arg = cache_arg.parent
+            cache_arg.mkdir(parents=True, exist_ok=True)
+            return run_poll_loop(
+                daily_limit=args.propline_budget,
+                min_mispricing_pp=args.alert_pp,
+                min_alert_pp=args.alert_pp,
+                cache_path=cache_arg,
+                once=bool(args.poll_once),
+            )
 
     parser.print_help()
     return 0

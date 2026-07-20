@@ -84,6 +84,7 @@ class Leg(BaseModel):
     player_id: str
     player_name: str
     sport_id: Optional[str] = "UNK"  # NBA, MLB, NFL, ...
+    team_id: Optional[str] = None  # team identifier for correlation analysis
     match_id: Optional[int] = None
     match_title: Optional[str] = None
     scheduled_at: Optional[str] = None

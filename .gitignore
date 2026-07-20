@@ -17,3 +17,5 @@ reports/
 
 # Allow demo CSVs in data/
 !data/*.csv
+data/sharp_cache/
+data/alerts.jsonl
