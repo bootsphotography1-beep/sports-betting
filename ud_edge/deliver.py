@@ -1,7 +1,7 @@
 """Markdown + console output for the daily pick report."""
 from __future__ import annotations
 from datetime import datetime, timezone
-from ud_edge.flex_math import UD_PAYOUTS, expected_value
+from ud_edge.flex_math import UD_PAYOUTS, expected_value, expected_value_per_card
 from ud_edge.matcher import effective_true_prob, get_player_status
 from ud_edge.models import Leg, RankedLeg
 from ud_edge.safety_gate import recommendation_label, is_research_mode
@@ -73,11 +73,27 @@ def build_report(
     # Audit P0: was max(picked, sharp) which overstated edge when sharp was
     # slightly bearish-but-in-band (within ±2pp). effective_true_prob is
     # sharp-authoritative: it returns sharp when present, picked otherwise.
-    avg_prob = (
-        sum(effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in top_legs) / len(top_legs)
-        if top_legs else 0.0
+    # Audit P0 residual (remediation v3): use expected_value_per_card (heterogeneous
+    # exact) instead of the homogeneous expected_value(entry, avg_prob) which
+    # averages the effective probs and re-runs them through a single-leg payout
+    # model. For mixed-confidence cards this overstates EV by a few cents per $1.
+    #
+    # When top_n < entry.n_legs (we don't have enough legs to fill a card),
+    # expected_value_per_card is undefined (it requires exactly n_legs probs).
+    # Fall back to homogeneous expected_value() so the report still renders
+    # a partial-card EV with an explicit warning instead of crashing.
+    per_leg = (
+        [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in top_legs]
+        if top_legs else []
     )
-    ev, win_prob, median_payout = expected_value(entry, avg_prob) if top_legs else (0, 0, 0)
+    avg_prob = (sum(per_leg) / len(per_leg)) if per_leg else 0.0
+    if per_leg and len(per_leg) == entry.n_legs:
+        ev, win_prob, median_payout = expected_value_per_card(entry, per_leg)
+    else:
+        # Partial card or empty — homogeneous fallback. Mark with avg_prob only.
+        ev, win_prob, median_payout = (
+            expected_value(entry, avg_prob) if per_leg else (0, 0, 0)
+        )
     ev_str = f"**{ev:+.4f}**"
     win_str = f"**{win_prob:.1%}**"
     if is_research_mode():
@@ -208,8 +224,9 @@ def build_multi_report(
         md.append("| Entry | Avg True% | EV/$1 | Win% | Rec | Mispricings |")
         md.append("|-------|-----------|-------|------|-----|-------------|")
         for i, lineup in enumerate(lineups, 1):
-            avg_prob = sum(effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup) / len(lineup)
-            ev, win_prob, med = expected_value(entry, avg_prob)
+            per_leg = [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup]
+            avg_prob = sum(per_leg) / len(per_leg)
+            ev, win_prob, med = expected_value_per_card(entry, per_leg)
             rec = recommendation_label(ev, win_prob)
             n_mis = sum(1 for r in lineup if r.sharp_true_prob is not None)
             mis_str = str(n_mis) if n_mis > 0 else "—"
@@ -226,12 +243,13 @@ def build_multi_report(
 
     # ── Per-entry sections ──
     for i, lineup in enumerate(lineups, 1):
-        avg_prob = sum(effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup) / len(lineup)
-        ev, win_prob, median_payout = expected_value(entry, avg_prob)
+        per_leg = [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup]
+        avg_prob = sum(per_leg) / len(per_leg)
+        ev, win_prob, median_payout = expected_value_per_card(entry, per_leg)
         rec = recommendation_label(ev, win_prob)
 
         # Min true prob on this card (the floor — worst leg)
-        min_leg_prob = min(effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup)
+        min_leg_prob = min(per_leg)
         n_mis = sum(1 for r in lineup if r.sharp_true_prob is not None)
 
         md.append(f"## Entry #{i} — {entry.name}")
