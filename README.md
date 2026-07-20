@@ -1,260 +1,224 @@
 # ud-edge-bot
 
-**Sharp-book vs fantasy mispricing detector** for Underdog, PrizePicks, and Sleeper.
+> **Sharp-book vs fantasy mispricing detector for Underdog, PrizePicks, and Sleeper.**
+> Pulls Underdog's live player-prop board, strips vig, ranks soft fantasy lines,
+> cross-references sharp-book prices when available, and serves a white **Edge
+> Board** dashboard on your LAN / Tailscale so you can browse picks by sport and
+> copy-paste ready lines into the fantasy apps.
 
-Fetches Underdog's live player-prop board (plus optional PrizePicks/Sleeper CSV
-boards), pulls sharp/reputable sportsbook prices, strips vig, ranks soft fantasy
-lines, and serves a white **Edge Board** dashboard so you can browse by sport and
-copy-paste picks into fantasy apps.
+> **⚠️ RESEARCH-ONLY MODE** — payout model is mathematically verified, but the
+> bot is **not externally calibrated**. Recommendation labels say
+> `RESEARCH ESTIMATE (unverified model)`. ≥50 settled legs + Brier/log-loss
+> bands required before lifting to verified mode. See `HONEST_STATUS.md`.
 
-## Why this works
+---
 
-Underdog's `/beta/v5/over_under_lines` endpoint returns **thousands of player-prop
-lines** across many sports — with **both sides priced** (American + decimal
-odds + payout multiplier). When a book prices both sides of a prop, we can
-strip the vig and recover the true probability of each side:
+## Table of contents
 
-```
-implied_over  = 1 / decimal_over
-implied_under = 1 / decimal_under
-overround     = implied_over + implied_under  (>1.0 = book vig)
-true_over     = implied_over  / overround
-true_under    = implied_under / overround
-```
+1. [Quick start](#quick-start)
+2. [The Edge Board dashboard](#the-edge-board-dashboard)
+3. [Dashboard API reference](#dashboard-api-reference)
+4. [CLI reference](#cli-reference)
+5. [Entry-type cheat sheet](#entry-type-cheat-sheet)
+6. [How the math works](#how-the-math-works)
+7. [Stale pricing detection](#stale-pricing-detection)
+8. [Data sources — what works, what doesn't](#data-sources--what-works-what-doesnt)
+9. [Architecture](#architecture)
+10. [Test & quality gates](#test--quality-gates)
+11. [For other agents — operating manual](#for-other-agents--operating-manual)
+12. [Roadmap to verified mode](#roadmap-to-verified-mode)
+13. [Disclaimer](#disclaimer)
 
-The **favorite side after vig removal** is the +EV side. When a sharp book
-(DraftKings / FanDuel / BetMGM / manual Pinnacle CSV) disagrees with the fantasy
-line on the **same side**, that mispricing is boosted to the top of the board.
+---
 
 ## Quick start
 
 ```bash
 cd ~/projects/ud-edge-bot
+
+# 0. Install (editable, with dev + dashboard extras)
 uv venv && uv pip install -e ".[dev,dashboard]"
 
 # 1. Math self-test (no network, ~2 sec)
 python -m ud_edge --self-test
 
-# 2. Dry run with synthetic data (no network, ~2 sec)
+# 2. Dry run on synthetic data (no network, ~2 sec)
 python -m ud_edge --dry-run
 
-# 3. Live run — all sports, 6-flex entry
+# 3. Live one-shot — all sports, 6-flex entry
 python -m ud_edge --once --entry 6-flex
 
-# 4. NBA only, 3-man-power
+# 4. NBA only
 python -m ud_edge --once --sport NBA --entry 3-man-power
 
-# 5. Lower threshold (more picks, smaller edge)
+# 5. Lower the bar (more picks, smaller edge)
 python -m ud_edge --once --min-true-prob 0.52 --min-edge-pp 0.1
 
-# 6. Save Markdown report
+# 6. Save a Markdown report
 python -m ud_edge --once --entry 6-flex --save reports/$(date +%F).md
 
-# 7. Build 3-4 disjoint 6-flex entries from the same edge pool
-python -m ud_edge --once --entry 6-flex --entries 4 --save reports/$(date +%F)_multi.md
+# 7. Build 4 disjoint 6-flex entries from the same edge pool
+python -m ud_edge --once --entry 6-flex --entries 4
 
-# 8. Same, but with --full-game-only to drop mid-game / obscure-sport props
+# 8. Drop mid-game / obscure-sport props
 python -m ud_edge --once --entry 6-flex --entries 4 --full-game-only
 
-# 9. Launch the white Edge Board dashboard on your computer
+# 9. Launch the Edge Board on localhost
 python -m ud_edge --serve
 # → http://127.0.0.1:8787
 ```
 
-## Edge Board dashboard
+### One-liner for a daily pick report on Slack
 
 ```bash
-pip install -e ".[dashboard]"
+python -m ud_edge --once --entry 6-flex --entries 4 \
+  --full-game-only --save reports/$(date +%F).md
+```
+
+---
+
+## The Edge Board dashboard
+
+```bash
+# Local only
 python -m ud_edge --serve --host 127.0.0.1 --port 8787
+
+# LAN + Tailscale (bind 0.0.0.0; accessible on your tailnet)
+python -m ud_edge --serve --host 0.0.0.0 --port 8787
 ```
 
-Open **http://127.0.0.1:8787** in your browser. The board:
+Then open:
 
-- Divides opportunities by **sport** (tabs + per-sport sections)
-- Highlights legs where sharp books disagree with soft fantasy prices (≥2pp)
-- Builds disjoint lineups you can paste into apps
-- One-click **Copy** buttons for PrizePicks / Sleeper / Underdog formats
-  (per pick, per sport, or entire slate)
+- **Local:**  `http://127.0.0.1:8787/`
+- **Tailscale:** `http://<your-tailnet-ip>:8787/` (find it with `tailscale ip -4`)
 
-Optional env keys for live sharp / fantasy pulls:
+The board:
+- Tabs by sport (MLB, NBA, WNBA, NHL, EPL, MLS, NCAAF, TENNIS, …).
+- Per-leg EV with `true_prob`, `edge_pp`, and `is_mispriced` flag.
+- Disjoint 6-flex lineups you can paste into apps (entry #1 has the highest
+  edge; #4 has the floor). Auto-fallback to fewer entries on thin slates.
+- One-click **Copy** buttons for PrizePicks / Sleeper / Underdog formats —
+  per pick, per sport, or whole slate.
+- "Refresh slate" button re-pulls without restarting.
+- **Research-only banner** always visible — model status, settled-leg count,
+  recommendation label. See `HONEST_STATUS.md`.
 
-| Env var | Source |
-|---|---|
-| `PROPLINE_API_KEY` | **Preferred** — [PropLine](https://prop-line.com) (Pinnacle + DK/FD + PrizePicks/Underdog/Sleeper) |
-| `ODDS_API_KEY` | [The Odds API](https://the-odds-api.com) player props |
-| `SPORTSGAMEODDS_KEY` | [SportsGameOdds](https://sportsgameodds.com) free tier |
+---
 
-```bash
-export PROPLINE_API_KEY=your_key_here
-python -m ud_edge --serve
-```
+## Dashboard API reference
 
-Without keys, `data/sharp_lines.csv` is still used as the sharp ground truth.
+All endpoints return JSON unless noted. Errors are JSON with `{"error": "..."}`.
 
-## Daily cron
-
-The bot runs daily at **17:00 UTC** (10am PT / 1pm ET) via Hermes cron,
-delivering the Markdown pick report to Slack automatically:
-
-```bash
-# Job: ud-edge-daily-picks (id: 1c72b160e604)
-# Schedule: 0 17 * * *
-# Script:   ~/.hermes/scripts/ud_edge_daily.sh
-# Default mode: --entries 4 → 4 disjoint 6-flex entries (24 unique legs)
-```
-
-**Multi-entry mode** (`--entries N`): partitions the ranked legs into N
-disjoint 6-leg lineups so you can place multiple cards from the same edge
-pool. Entry #1 has the highest-edge legs; #4 has the floor. Auto-fallbacks
-to fewer entries when the slate is thin (e.g. only 12 ranked legs → 2 entries).
-
-**Full-game-only mode** (`--full-game-only`): drops mid-game props (period 1
-strikeouts, first-half goals, mid-match tennis games) and obscure sports
-(CS/LOL/DOTA/VAL/ESPORTS/RACING/CFL). Yields fewer but more time-stable
-edges — recommended for the daily cron job.
-
-**Result tracking** (`--calibration`, `--settle`): every run logs all picks
-to `data/results.json`. Settle picks manually with `--settle <index>:hit:stat`
-or `:miss:stat` after games complete, then check calibration (Brier score,
-log-loss, predicted-vs-actual by prob bucket). Target: 50+ settled legs
-before trusting EV estimates.
-
-To add sharp-book cross-reference data, edit `data/sharp_lines.csv` with
-today's Pinnacle / DraftKings / Bet365 lines for the players you want
-to verify. ~5 min/day for ~10-30 lines. Bot re-ranks picks where UD
-disagrees with the sharp book by ≥2pp.
-
-## Stale pricing detection (Phase 1)
-
-### Snapshot storage
-
-The bot maintains an append-only SQLite snapshot store of every observed market:
-
-```bash
-# Fetch live UD data and save snapshots
-python -m ud_edge --snapshot
-
-# Run a stale/movement report on the existing snapshot DB (no new fetch)
-python -m ud_edge --stale-report
-
-# Custom thresholds
-python -m ud_edge --snapshot \
-  --snapshot-db data/line_snapshots.sqlite3 \
-  --min-stale-minutes 30 \
-  --fresh-window-minutes 120 \
-  --min-line-gap 0.5 \
-  --min-prob-gap-pp 3.0 \
-  --min-movement-line 0.5 \
-  --min-movement-prob-pp 3.0 \
-  --save reports/stale_latest.md
-```
-
-The snapshot DB (`data/line_snapshots.sqlite3`) stores every observation with:
-- Source, source line ID, player name, sport, stat, line value
-- No-vig higher/lower true probabilities
-- Match title and scheduled start time
-- UTC capture timestamp
-- Canonical market key (source-agnostic: `normalized_player|sport|normalized_stat|event_title|event_date`)
-
-### Second source: CSV (and clipboard) ingestion
-
-`--snapshot` accepts one or more additional source feeds so the cross-source
-stale detector has something to compare against. Today the practical second
-source is whatever you can capture yourself (PrizePicks / Sleeper / DK /
-BetMGM) — the existing PP board parser is copied into
-`ud_edge/pp_clipboard.py` and exposed via the CLI:
-
-```bash
-# One-command two-source snapshot (Underdog live + your CSV)
-python -m ud_edge --snapshot \
-  --ingest-csv data/draftkings_demo.csv --csv-source draftkings \
-  --save reports/stale_two_source_demo.md
-
-# Pull a fresh board from the Windows clipboard (PrizePicks / Sleeper)
-python -m ud_edge --snapshot --ingest-prizepicks-clipboard
-```
-
-CSV columns (canonical order): `player_name, league, stat_type, line,
-higher_decimal, lower_decimal, event_title, scheduled_at`. Extra columns are
-ignored; rows missing `player_name`/`stat_type`/`line` are skipped. Add
-`source` if you want per-row source labels; otherwise the CLI's
-`--csv-source` label applies to every row.
-
-Two-source end-to-end example with the included demo CSVs:
-
-```bash
-# 1) Live Underdog snapshot
-python -m ud_edge --snapshot
-# 2) Layer in a DraftKings board you typed up
-python -m ud_edge --snapshot \
-  --ingest-csv data/draftkings_demo.csv --csv-source draftkings \
-  --save reports/stale_two_source_demo.md
-# Result (with Jayson Tatum BOS@NYK Points moving draftkings 28.5 -> 28.0):
-# 🟡 medium | prizepicks (28.5) -> draftkings (28.0) | lower | gap 1.0pts / 2.1pp
-```
-
-### Movement detection
-
-The movement detector compares each source's latest observation with its prior
-observation. A movement is recorded when EITHER:
-- `|line_change| >= min_line_move` (absolute line shift)
-- `|prob_shift_pp| >= min_prob_move_pp` (same-side true-probability shift in pp)
-
-Movement direction is explicit: `up`, `down`, or `flat` (price-only move).
-
-### Cross-source stale opportunity detection
-
-A stale opportunity is flagged only when evidence exists for BOTH conditions:
-
-1. **Stale source**: one source has been unchanged (same line) for ≥ `min_stale_minutes`
-2. **Fresh source**: another source has meaningfully moved within `fresh_window_minutes`
-
-Additionally, either a line gap ≥ `min_line_gap` OR a true-probability gap ≥ `min_prob_gap_pp`
-must exist between the two sources. Static disagreement with no movement history is
-**never** flagged as stale.
-
-Stale-opportunity `direction` is the side to play on the stale source: `higher`
-means Higher/Over; `lower` means Lower/Under. Both sources need at least two
-observations so the detector can prove unchanged-vs-moved behavior.
-
-Events with `scheduled_at` in the past are excluded by default (`reject_started=True`).
-
-### Source limitations (verified 2026-07-18)
-
-The following sources have been investigated and are **NOT** currently accessible:
-
-| Source | Status | Reason |
+| Method | Path | Purpose |
 |---|---|---|
-| **PrizePicks** | ❌ 403 X-DataDome from this host | The Stack Overflow `/projections?...` method is currently challenged; keep a manual/partner-feed fallback |
-| **Sleeper** | ❌ No Picks API | Public API has no player-prop or Picks endpoint |
-| **Pinnacle** | ❌ Geo-blocked + closed | Public access closed 2025-07-23; geo-restricted |
-| **Southpaw** | ❌ Wrong type | FanDuel DFS contest wrapper, not a sportsbook props feed |
+| `GET` | `/` | Edge Board HTML (white-label single-page app) |
+| `GET` | `/static/*` | CSS / JS assets |
+| `GET` | `/HONEST_STATUS.md` | Audit + research-mode status doc (Markdown) |
+| `GET` | `/api/health` | Liveness: `{"ok": true, ...}` |
+| `GET` | `/api/opportunities` | Full ranked board (per-leg opportunities + lineup summary) |
+| `GET` | `/api/sports` | Sport list with per-sport leg counts |
+| `GET` | `/api/props` | Per-sport prop cards with copy lines |
+| `GET` | `/api/lineups` | **Disjoint parlay lineups** — the endpoint the dashboard calls when "Refresh slate" hits |
+| `GET` | `/api/alerts/recent` | Stale-pricing / mispricing alerts (last 50) |
+| `GET` | `/api/budget` | API-call budget snapshot (today's spend vs cap) |
+| `GET` | `/api/export/{platform}` | `platform ∈ {prizepicks, sleeper, underdog}` — copy-ready text dump |
 
-**Currently wired into snapshot history:** Underdog Fantasy (live) and any
-manually-supplied CSV (`--ingest-csv`); `--ingest-prizepicks-clipboard` reads
-the Windows clipboard with the parser copied from the sibling
-`prizepicks-edge-bot` project. `data/sharp_lines.csv` still powers one-run
-mispricing ranking, but is not yet automatically snapshotted as a second
-source. See the *Second source: CSV (and clipboard) ingestion* section
-above for a working two-source demo.
+### `GET /api/lineups` — query params
 
-## Mispricing workflow (sharp-book cross-reference)
+| Param | Default | Meaning |
+|---|---|---|
+| `n_entries` | `1` | Number of disjoint lineups to build (1-10) |
+| `entry_type` | `6-flex` | `3-man-power`, `4-man-power`, `4-flex`, `5-flex`, `6-flex` |
+| `min_true_prob` | `0.6` | Minimum leg true probability |
+| `min_edge_pp` | `0.5` | Minimum edge vs break-even, in percentage points |
+| `sport` | _all_ | Filter to one sport (e.g. `MLB`, `NBA`, alias-tolerant) |
+| `mispriced_only` | `false` | Restrict to legs where sharp book disagrees ≥2pp |
+| `full_game_only` | `true` | Drop mid-game / obscure-sport props |
+| `return_ranked` | `false` | If `true`, return the full ranked leg list alongside the lineups |
 
-The bot supports these sharp / fantasy data sources:
+Example:
 
-1. **PropLine** (`PROPLINE_API_KEY`) — **preferred**. Pinnacle + DK/FD/BetMGM
-   plus PrizePicks / Underdog / Sleeper boards in one feed. Hobby ($9) / Pro ($19).
+```bash
+curl -s "http://127.0.0.1:8787/api/lineups?n_entries=3&entry_type=6-flex&min_true_prob=0.6" \
+  | python -m json.tool | head -60
+```
 
-2. **Manual CSV** (`data/sharp_lines.csv`) — works with no signup.
-   Copy lines from any sportsbook into this file as a fallback.
+Response shape:
 
-3. **The Odds API** (`ODDS_API_KEY`) — US-book player props (paid plans start $30).
+```json
+{
+  "entry_type": "6-flex",
+  "n_entries": 3,
+  "lineups": [
+    {
+      "entry": 1,
+      "n_legs": 6,
+      "avg_true_prob": 0.7123,
+      "win_prob": 0.7667,
+      "median_payout": 0.4,
+      "ev": 3.0249,
+      "opportunities": [ /* 6 RankedLeg objects */ ]
+    }
+  ],
+  "totals": { "legs_scanned": 3886, "opportunities": 118, "sports": 4 },
+  "safety_status": { "is_research_mode": true, "recommendation": "RESEARCH ESTIMATE (unverified model)" }
+}
+```
 
-4. **SportsGameOdds** (`SPORTSGAMEODDS_KEY`) — free Amateur tier available;
-   paid plans are much higher.
+The dashboard's frontend calls this endpoint **once per Refresh**, with
+`return_ranked=true` so the per-sport cards and copy buttons can re-use the
+same ranked leg list. This replaced the old pattern of one HTTP call per
+card (~2,000 calls/min) with a single batched fetch.
 
-Comparison is **side-aligned**: sharp over ↔ fantasy Higher/More,
-sharp under ↔ Lower/Less. Soft fantasy prices rise to the top of Edge Board.
+---
+
+## CLI reference
+
+```
+python -m ud_edge [--once|--snapshot|--stale-report|--serve|--self-test|--dry-run|--settle ...]
+
+One-shot pick run:
+  --once                          Compute a fresh pick report
+  --entry {3-man-power,4-man-power,4-flex,5-flex,6-flex}
+  --entries N                     Build N disjoint lineups (default 1)
+  --sport SPORT                   Filter: NBA, MLB, NHL, ... (alias-tolerant)
+  --min-true-prob P               Floor on leg true probability (default 0.60)
+  --min-edge-pp PP                Floor on edge vs break-even (default 0.5)
+  --full-game-only                Drop mid-game / obscure-sport props
+  --mispriced-only                Restrict to sharp-book-disagreement legs
+  --save PATH                     Write Markdown report to PATH
+  --results PATH                  results.json path (default data/results.json)
+
+Snapshot / stale:
+  --snapshot                      Snapshot live UD board (+ optional CSVs)
+  --stale-report                  Run cross-source stale detector on snapshots
+  --snapshot-db PATH              SQLite snapshot DB (default data/line_snapshots.sqlite3)
+  --min-stale-minutes M           Stale threshold (default 30)
+  --fresh-window-minutes M        Fresh-movement window (default 120)
+  --min-line-gap G                Min line gap to flag stale (default 0.5)
+  --min-prob-gap-pp PP            Min true-prob gap to flag stale (default 3.0)
+  --min-movement-line L           Min line move to count as movement (default 0.5)
+  --min-movement-prob-pp PP       Min prob shift to count as movement (default 3.0)
+  --ingest-csv PATH               Add a CSV as a second source for stale detect
+  --csv-source NAME               Label for that CSV source
+  --ingest-prizepicks-clipboard   Read Windows clipboard as second source
+
+Calibration:
+  --settle INDEX:hit:STAT         Mark pick INDEX as HIT (stat is for record)
+  --settle INDEX:miss:STAT        Mark pick INDEX as MISS
+  --calibration                   Print Brier + log-loss + bucket accuracy
+
+Dashboard:
+  --serve                         Launch FastAPI dashboard
+  --host HOST                     Bind host (use 0.0.0.0 for LAN/Tailscale)
+  --port PORT                     Bind port (default 8787)
+
+Dev:
+  --self-test                     Pure-math + sanity self-test
+  --dry-run                       Synthetic data end-to-end smoke test
+```
+
+---
 
 ## Entry-type cheat sheet
 
@@ -266,71 +230,348 @@ sharp under ↔ Lower/Less. Soft fantasy prices rise to the top of Edge Board.
 | 5-flex | 5/5=10×, 4/5=4×, 3/5=2× | 57.81% | Better than 4-flex for variance |
 | **6-flex** | **6/6=25×, 5/6=2×, 4/6=0.4×** | **52.40%** | High variance, low break-even |
 
-The bot's daily report includes an entry-type comparison so you can pick
-the variance profile you want from the same leg pool.
+The 6-flex break-even is solved numerically (`flex_math.solve_break_even`)
+to **0.5421** (verified Wave 1; was incorrectly 0.5240 before audit).
+
+---
+
+## How the math works
+
+### No-vig from two-sided fantasy prices
+
+```
+implied_over  = 1 / decimal_over
+implied_under = 1 / decimal_under
+overround     = implied_over + implied_under   (>1.0 = book vig)
+true_over     = implied_over  / overround
+true_under    = implied_under / overround
+```
+
+When Underdog prices both sides of a prop, we strip the vig and recover the
+true probability of each side. The favorite side after vig removal is +EV
+relative to Underdog's own listing.
+
+### Per-leg EV (Wave 1 fix)
+
+EV is computed **per leg**, not as a lineup-average:
+
+```
+edge_pp = true_prob − break_even(entry_type)
+```
+
+Earlier code averaged per-leg probabilities across a lineup before comparing
+to break-even — that understated edge for any lineup containing a heavy
+favorite. Wave 1 closed this with `ev.leg_edge_pp` on every `RankedLeg`.
+
+### Sharp-book cross-reference (Wave 2A)
+
+When a sharp book (Pinnacle via PropLine, or any line in `data/sharp_lines.csv`)
+disagrees with fantasy on the **same side** by ≥2pp:
+- **Sharp-authoritative**: fantasy lines that disagree with sharp are de-boosted.
+- **Exact tolerance**: comparison is exact (`< 0.01` rounding), no silent doubling.
+- **Freshness**: sharp observations older than `SHARP_MAX_AGE_MINUTES` are dropped.
+- **Event identity**: matching keys now include event title + date, so a
+  stale series entry can't match today's game.
+
+### Mispricing flag
+
+```
+is_mispriced = (sharp_same_side_true_prob > fantasy_same_side_true_prob + 2pp)
+```
+
+`is_mispriced=true` legs rise to the top of Edge Board.
+
+---
+
+## Stale pricing detection
+
+### Snapshot DB
+
+Every `--snapshot` run writes every observed market to
+`data/line_snapshots.sqlite3` with:
+- source, source line ID, player, sport, stat, line
+- no-vig higher/lower true probabilities
+- match title and scheduled start
+- UTC capture timestamp
+- canonical market key (source-agnostic)
+
+### Movement detector
+
+A movement is recorded when **either**:
+- `|line_change| ≥ min_line_move`
+- `|prob_shift_pp| ≥ min_prob_move_pp`
+
+Direction: `up`, `down`, or `flat` (price-only move).
+
+### Cross-source stale opportunity
+
+A stale opportunity is flagged only when **both**:
+1. **Stale source** — unchanged (same line) for ≥ `min_stale_minutes`
+2. **Fresh source** — meaningfully moved within `fresh_window_minutes`
+
+And **either**:
+- `|line_gap| ≥ min_line_gap`, or
+- `|prob_gap_pp| ≥ min_prob_gap_pp`
+
+Static disagreement with no movement history is **never** flagged as stale.
+`direction` is the side to play on the stale source: `higher` = Over,
+`lower` = Under.
+
+### Second source: CSV / clipboard
+
+```bash
+# Two-source snapshot: live Underdog + your CSV
+python -m ud_edge --snapshot \
+  --ingest-csv data/draftkings_demo.csv --csv-source draftkings \
+  --save reports/stale_two_source_demo.md
+
+# Pull a fresh board from the Windows clipboard (PrizePicks / Sleeper)
+python -m ud_edge --snapshot --ingest-prizepicks-clipboard
+```
+
+CSV columns (canonical order):
+`player_name, league, stat_type, line, higher_decimal, lower_decimal, event_title, scheduled_at`.
+Extra columns ignored; rows missing required fields are skipped. `--csv-source`
+labels all rows in that batch.
+
+---
+
+## Data sources — what works, what doesn't
+
+| Source | Status | Notes |
+|---|---|---|
+| **Underdog Fantasy** `/beta/v5/over_under_lines` | ✅ Live | ~6,700 lines/day, 17 sports, no auth, both sides priced |
+| **PropLine** (`PROPLINE_API_KEY`) | ✅ Preferred sharp | Pinnacle + DK/FD/BetMGM + PrizePicks/UD/Sleeper, hobby $9 / pro $19 |
+| **Manual CSV** `data/sharp_lines.csv` | ✅ Free fallback | `player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker` |
+| **The Odds API** (`ODDS_API_KEY`) | ✅ US books | Player props, paid plans start $30 |
+| **SportsGameOdds** (`SPORTSGAMEODDS_KEY`) | ⚠️ Free tier | Validate adapter vs live key |
+| **apisports.io** free | ⚠️ Fixtures only | Player props + odds gated to paid tier |
+| **ESPN public injury API** | ✅ Free, no auth | Filter OUT / INJURY_RESERVE / SUSPENDED / DOUBTFUL |
+| **PrizePicks** | ❌ 403 X-DataDome | This host is challenged; keep manual/partner feed fallback |
+| **Sleeper** | ❌ No Picks API | Public API has no player-prop or Picks endpoint |
+| **Pinnacle direct** | ❌ Geo-blocked + closed | Public access closed 2025-07-23 |
+| **Southpaw** | ❌ Wrong type | FanDuel DFS contest wrapper, not a props feed |
+
+---
 
 ## Architecture
 
 ```
 ud_edge/
-├── __main__.py              # CLI: --self-test | --once | --snapshot | --serve
-├── models.py                # Pydantic: Leg, RankedLeg, …
+├── __main__.py              # CLI dispatcher (argparse → subcommands)
+├── models.py                # Pydantic: Leg, RankedLeg, Opportunity, Lineup, ...
 ├── no_vig.py                # Decimal/American odds → true_prob
-├── flex_math.py             # Payout tables + per-entry EV
-├── ud_client.py             # Underdog live board
+├── flex_math.py             # Payout tables + per-entry EV + break-even solver
+├── ud_client.py             # Underdog live board fetcher
 ├── sharp_books_client.py    # Manual CSV + Odds API + SportsGameOdds
 ├── compare.py               # Fantasy-vs-sharp pipeline (dashboard feed)
 ├── copy_format.py           # PrizePicks / Sleeper / Underdog paste lines
 ├── matcher.py               # rank_legs() + side-aligned sharp compare
 ├── stale_pricing.py         # Snapshot DB + stale opportunity detector
 ├── pp_clipboard.py          # CSV / clipboard second-source adapter
+├── safety_gate.py           # Research-mode banner + recommendation labels
 ├── deliver.py               # Markdown reports
-└── dashboard/               # White Edge Board frontend
-    ├── app.py               # FastAPI: /api/opportunities, /api/export/{platform}
+├── injury_filter.py         # ESPN injury-status filter (free, no auth)
+└── dashboard/
+    ├── app.py               # FastAPI: all /api/* endpoints + serves static
     └── static/              # index.html + styles.css + app.js
+
+scripts/
+├── run_tests.sh             # pytest -q
+├── lint.sh                  # ruff check .
+├── smoke_dashboard.sh       # Hit /, /api/health, /HONEST_STATUS.md, plus 400 tests
+└── ud_edge_daily.sh         # Hermes cron entry point (if scheduled)
+
+data/
+├── ud_lines_cache.json              # Last live UD snapshot
+├── sharp_lines.csv                  # Manual sharp-book cross-reference
+├── results.json                     # Calibration log (HIT/MISS settlement)
+├── line_snapshots.sqlite3           # Append-only observation store
+└── sharp_cache/propline_*.json      # PropLine per-event cache
+
+tests/                        # 298 unit + integration tests
+reports/                      # Markdown reports (one per --save run)
+docs/                         # PAYOUT_RULES.md (TODO), design notes
+.github/workflows/ci.yml      # Lint + test + self-test + dry-run + smoke + pip-audit
 ```
 
-## Data sources
+---
 
-**Primary (no-vig calc):** Underdog Fantasy's own two-sided decimal odds
-from `/beta/v5/over_under_lines`. ~6,700 lines today across 17 sports. **Free, unauthenticated.**
+## Test & quality gates
 
-**Injury filter (free, no auth):** [ESPN public injury API](https://site.api.espn.com/apis/site/v2/sports/)
-- 1,387 players tracked today across NBA / NFL / MLB / NHL / WNBA / CFB / EPL / MLS / World Cup
-- 30-min disk cache (injury status changes hour-to-hour near game time)
-- Players with status `OUT / INJURY_RESERVE / SUSPENDED / DOUBTFUL` are **filtered out** of the pick report — their legs are unplayable
-- Players with `DAY_TO_DAY / QUESTIONABLE / PROBABLE` are kept in the report with a ⚠️ flag — verify on ESPN/team feed before submitting
+- **298/298 tests pass** locally on Windows + Python 3.11.9 (`pytest -q`)
+- **`ruff check .` is clean** (0 findings)
+- **Smoke verification** — dashboard returns:
+  - `200` for `/`, `/api/health`, `/HONEST_STATUS.md`
+  - `400` (JSON error) for invalid query params (`?entry=bogus`, `?min_true_prob=nan`)
+- **CI** (`.github/workflows/ci.yml`): ruff, pytest, `--self-test`,
+  `--dry-run`, dashboard smoke loop, `pip-audit --strict`
 
-**Sharp-book cross-reference (mispricing detection):**
+Run them all locally:
 
-- **Manual CSV source** (`data/sharp_lines.csv`) — works today, no signup.
-  Format: `player_name,stat_name,line_value,over_decimal,under_decimal,bookmaker`.
-- **The Odds API** (`ODDS_API_KEY`) — US books player props (DK/FD/BetMGM, …).
-- **SportsGameOdds free tier** (`SPORTSGAMEODDS_KEY`) — validate adapter vs live key.
-- Comparison is **side-aligned** (sharp over ↔ fantasy Higher; sharp under ↔ Lower).
-- Soft fantasy lines (sharp same-side true prob higher) are boosted on Edge Board.
+```bash
+ruff check .
+pytest -q
+python -m ud_edge --self-test
+python -m ud_edge --dry-run
+bash scripts/smoke_dashboard.sh
+```
 
-**Secondary cross-reference:** [apisports.io](https://apisports.io) (free tier)
-- 100 req/day budget — cache aggressively
-- Football fixtures today ✅ (723 results today)
-- American-football games today ✅ (offseason — 0 games today)
-- Predictions (win/draw/loss %) ✅
-- Player stats ⚠️ — free plan returns mostly NULL fields
-- **Odds endpoint ❌** — gated to 2022-2024 historical dates AND paid plans
-- **Player props ❌** — gated to paid tier (verified via `/account` endpoint: 0/388 books have player props on free)
+---
 
-So apisports is currently used for **fixture validation and metadata enrichment**,
-NOT as a sharp-book odds source. UD's own pricing remains the no-vig source.
+## For other agents — operating manual
 
-## Source
+If you are an AI agent picking up this repo cold, here is everything you need
+to operate it without breaking anything.
 
-Built on top of the unauthenticated `/beta/v5/over_under_lines` endpoint
-discovered via [aidanhall21/underdog-fantasy-pickem-scraper](https://github.com/aidanhall21/underdog-fantasy-pickem-scraper)
-(verified alive 2026-07-18).
+### Read these first, in order
+
+1. **`HONEST_STATUS.md`** — current research-mode state, what the audit
+   closed, what is still pending. **The single source of truth for whether
+   the bot is safe to act on.**
+2. **`README.md`** (this file) — system overview.
+3. **`docs/PAYOUT_RULES.md`** — official payout tables. If this file does
+   not exist, the payout model is **not externally verified** — the bot is
+   in research-only mode and stays there.
+4. **`data/results.json`** — settled picks. If `settled_legs_count < 50`,
+   calibration is insufficient and research-mode cannot be lifted.
+
+### Guardrails — DO NOT violate these
+
+- **Never set `_PAYOUT_MODEL_VERIFIED = True`** without:
+  - Verifying the official Underdog Fantasy payout rules and archiving
+    them in `docs/PAYOUT_RULES.md`.
+  - Adding a regression test that re-fetches the rules and asserts.
+- **Never re-enable `_VERIFIED_LABELS`** (STRONG PLAY, LEAN, etc.) until:
+  - `data/results.json` has ≥50 settled HIT/MISS legs.
+  - Brier score and log-loss are within the calibration bands set by the
+    maintainer.
+- **Never modify `flex_math.py`** without re-running `--self-test` AND the
+  full pytest suite. The break-even solver is the most fragile part of the
+  system; every Wave 1 fix was in this file or its callers.
+- **Never remove or weaken the sharp-authoritative comparison in
+  `compare.py`** — Wave 2A made fantasy lines defer to sharp books by
+  design. Reverting this is the fastest way to reintroduce phantom edges.
+- **Never delete `data/results.json`** — it is the calibration history.
+  Treat it like a database; rotate, never purge.
+- **Never change `--min-edge-pp` or `--min-true-prob` defaults** without
+  a corresponding calibration argument. They exist to filter phantom edges.
+
+### How to extend the bot safely
+
+- **Add a new entry type**: edit `flex_math.PAYOUTS`, add the break-even
+  solver case if it's not a simple linear payout, add a unit test for the
+  solver, run `--self-test`. Then add a `--entry` choice in `__main__.py`.
+- **Add a new sharp-book source**: implement a fetcher in
+  `sharp_books_client.py` that returns `SharpLine` objects, wire it into
+  `compare.py`'s pipeline, add a `--source` CLI flag, add tests with
+  synthetic data, **do not** lower the freshness / tolerance thresholds.
+- **Add a new dashboard card**: extend the `/api/opportunities` response
+  shape in `dashboard/app.py`, update `static/app.js`, mirror the change
+  in `static/index.html`, add a Playwright/curl smoke test to
+  `scripts/smoke_dashboard.sh`.
+- **Change the stale detector thresholds**: update defaults in
+  `stale_pricing.py`, add a `tests/test_stale_pricing_*.py` case, and
+  re-run `--snapshot --stale-report` end-to-end.
+
+### How to verify the bot is healthy
+
+```bash
+# 1. Lint clean?
+ruff check .
+
+# 2. Tests green?
+pytest -q
+
+# 3. Math sanity?
+python -m ud_edge --self-test
+
+# 4. Pipeline smoke?
+python -m ud_edge --dry-run
+
+# 5. Dashboard smoke?
+bash scripts/smoke_dashboard.sh
+
+# 6. Calibration status?
+python -m ud_edge --calibration
+```
+
+If any of these fail, the bot is not safe to use for live picks. Fix the
+failing gate first, then resume work.
+
+### How to ship a change
+
+1. Branch from `main` (or `fix/audit-remediation-v2` if the audit is still
+   in flight).
+2. Commit in TDD: red test → green impl → refactor. Include the
+   corresponding test in the same commit.
+3. Run all gates locally (`ruff`, `pytest`, `--self-test`, `--dry-run`,
+   `smoke_dashboard.sh`).
+4. Open a PR. The CI workflow runs the same gates plus `pip-audit`.
+5. After green CI, request review. Do **not** self-merge into `main` if
+   the change touches `flex_math.py`, `compare.py`, `safety_gate.py`, or
+   `dashboard/app.py` — these are the audit-critical files.
+
+### Common failure modes
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `/api/lineups` returns `{"lineups": []}` | Threshold too high OR slate too thin | Lower `min_true_prob` and `min_edge_pp`; check `data/ud_lines_cache.json` is fresh |
+| All legs flagged `RESEARCH ESTIMATE` | Research mode is on | Settle ≥50 picks via `--settle`, then re-check `--calibration` |
+| Sharp comparison silently disabled | Sharp data older than `SHARP_MAX_AGE_MINUTES` | Pull fresh PropLine/Odds API data, or update CSV |
+| `ruff` complains about unused imports | Wave 4 ruff pass left nothing; if it does, the import is actually used somewhere — run `ruff --fix --unsafe-fixes` |
+| `pytest` hangs on `test_stale_pricing_*.py` | Snapshot DB lock from a live `--snapshot` run | `rm data/line_snapshots.sqlite3-journal` (if any) |
+| Dashboard 500 on `/api/opportunities?entry=bogus` | Should be 400 (Wave 0 fix); regression? | Check `compare.py:validate_entry_type` |
+| `underround > 1.10` | Book has heavy vig on this market; leg still valid but edge compressed | Lower `min_edge_pp` or skip |
+| Same player appearing on multiple lineups | Disjoint-enough logic in `matcher.build_lineups` lost a leg | Check `_lineups_share_leg` guard in `compare.py` |
+
+### Tailscale exposure pattern
+
+The dashboard binds on `--host 0.0.0.0` to expose on the tailnet:
+
+```bash
+python -m ud_edge --serve --host 0.0.0.0 --port 8787
+```
+
+Find your tailnet IP with `tailscale ip -4`. Other tailnet devices hit
+`http://<your-tailnet-ip>:8787`. **Do not** port-forward 8787 to the public
+internet — there is no auth. Tailscale ACLs are the only access control.
+
+---
+
+## Roadmap to verified mode
+
+All three conditions must hold before lifting research-only mode:
+
+- [x] Payout model mathematically verified (Wave 1).
+- [ ] ≥50 settled HIT/MISS legs in `data/results.json`.
+- [ ] Brier score and log-loss within acceptable calibration bands.
+
+When all three are met:
+
+1. Verify official Underdog payout rules, archive to `docs/PAYOUT_RULES.md`.
+2. Set `_PAYOUT_MODEL_VERIFIED = True` in `safety_gate.py` and add a
+   regression test that re-fetches rules and asserts.
+3. Re-enable recommendation labels in `_VERIFIED_LABELS`.
+4. Schedule the daily cron (`scripts/ud_edge_daily.sh`, 17:00 UTC,
+   `--entries 4 --full-game-only`).
+
+Until then: every recommendation label in the dashboard reads
+`RESEARCH ESTIMATE (unverified model)`. Do not pretend otherwise.
+
+---
 
 ## Disclaimer
 
 Decision-support tool, not financial advice. Track every pick. Calibrate
-the threshold after 50+ settled legs. Past performance does not predict
-future results. Sports betting is gambling; bet only what you can afford
-to lose.
+after 50+ settled legs. Past performance does not predict future results.
+Sports betting is gambling; bet only what you can afford to lose.
+
+---
+
+## Source
+
+Built on top of the unauthenticated `/beta/v5/over_under_lines` endpoint
+discovered via
+[aidanhall21/underdog-fantasy-pickem-scraper](https://github.com/aidanhall21/underdog-fantasy-pickem-scraper)
+(verified alive 2026-07-18).
