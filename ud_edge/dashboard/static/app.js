@@ -211,7 +211,7 @@
       head.className = "panel-head";
       head.innerHTML = `
         <div>
-          <h2>${block.sport}</h2>
+          <h2>${escapeHtml(block.sport)}</h2>
           <p>${block.count} picks · ${block.mispriced_count} mispriced vs sharp</p>
         </div>
       `;
@@ -228,7 +228,7 @@
         b.className = "btn ghost small";
         b.textContent = `Copy ${label}`;
         b.addEventListener("click", () => {
-          copyText(block.copy?.[platform] || "", `${block.sport} · ${label}`);
+          copyText(block.copy?.[platform] || "", `${escapeHtml(block.sport)} · ${label}`);
         });
         copyGroup.appendChild(b);
       }
@@ -261,9 +261,11 @@
         const delta = opp.mispricing_edge_pp != null
           ? `${opp.mispricing_edge_pp >= 0 ? "+" : ""}${opp.mispricing_edge_pp.toFixed(1)}`
           : "—";
-        const book = opp.sharp_book ? `<span class="badge${mis ? " hot" : ""}">${opp.sharp_book}</span>` : "";
+        const book = opp.sharp_book
+          ? `<span class="badge${mis ? " hot" : ""}">${escapeHtml(opp.sharp_book)}</span>`
+          : "";
         const reason = opp.reason || {};
-        const reasonId = `reason-${block.sport}-${Math.random().toString(36).slice(2, 9)}`;
+        const reasonId = `reason-${escapeHtml(block.sport)}-${Math.random().toString(36).slice(2, 9)}`;
 
         tr.innerHTML = `
           <td data-label="Player">
