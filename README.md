@@ -184,6 +184,9 @@ One-shot pick run:
   --sport SPORT                   Filter: NBA, MLB, NHL, ... (alias-tolerant)
   --min-true-prob P               Floor on leg true probability (default 0.60)
   --min-edge-pp PP                Floor on edge vs break-even (default 0.5)
+  --line-tolerance F              Max |fantasy - sharp| line gap to match (default 0.5).
+                                  Audit P1 #6: was hard-coded 0.5; now configurable.
+                                  Try 1.0 to capture 1-line-gap soft lines.
   --full-game-only                Drop mid-game / obscure-sport props
   --mispriced-only                Restrict to sharp-book-disagreement legs
   --save PATH                     Write Markdown report to PATH
@@ -401,7 +404,7 @@ docs/                         # PAYOUT_RULES.md (TODO), design notes
 
 ## Test & quality gates
 
-- **365/365+ tests pass** locally on Windows + Python 3.11.9 (`pytest -q`)
+- **383/383+ tests pass** locally on Windows + Python 3.11.9 (`pytest -q`)
 - **`ruff check .` is clean** (0 findings)
 - **Smoke verification** — dashboard returns:
   - `200` for `/`, `/api/health`, `/HONEST_STATUS.md`
@@ -420,6 +423,30 @@ bash scripts/smoke_dashboard.sh
 ```
 
 ---
+
+## Audit remediations (2026-07-20)
+
+An independent audit (tip `85d6722`) found **6 P0/P1 issues** in the live code path
+that overstate EV, lose field identity, or under-count API spend. All six are fixed
+in this branch. New tests pin the contract so each bug can't silently re-appear.
+
+| # | Severity | Finding | Fix | Tests |
+|---|---|---|---|---|
+| **P0 #1** | Critical | `deliver.py` used `max(fantasy, sharp)` for per-card probability, overstating edge when sharp was slightly bearish-but-in-band | Replaced all 3 sites with `effective_true_prob()` (sharp-authoritative contract: returns sharp when present) | 8 (`test_audit_p0_probability_contract.py`) |
+| **P0 #2** | Critical | `compare.py` and `dashboard/app.py` lineup EV used fantasy-only average and homogeneous `expected_value()` — both understated variance and over-stated edge | Both sites now use `effective_true_prob` averaged + `expected_value_per_card()` (heterogeneous exact EV) | 6 (`test_audit_p0_lineup_ev_contract.py`) |
+| **P1 #3** | High | `docs/METHODOLOGY.md` and `README.md` quoted stale break-evens (6-flex 52.40% vs actual 54.21%; 3-man-power 54.95% vs 55.03%; etc.) | Both docs now quote `UD_PAYOUTS` directly; stale numbers guarded by tests | 18 (`test_audit_p1_documentation.py`) |
+| **P1 #4** | High | Poller called `budget.record(1)` once per cycle; a real cycle makes ~13–80 HTTP calls (1 events + N odds per sport). Daily limit silently blown 60-80x | `PropLineClient.calls_made` counter; `compare_fantasy_vs_sharp` reports count in `sharp_meta.propline_calls`; poller records the actual delta | 6 (`test_audit_p1_poller_budget.py`) |
+| **P1 #5** | High | Poller rebuilt `RankedLeg` from JSON-serialized `flat[]`, losing `sharp_book`, `match_id`, `fantasy_source` and silently under-alerting | Poller now passes `return_ranked=True` and consumes the live `RankedLeg` list — no JSON round-trip | 3 (`test_audit_p1_poller_ranked_rebuild.py`) |
+| **P1 #6** | Medium | `LINE_TOLERANCE = 0.5` was a function-local constant; soft fantasy lines 1.0+ away from sharp silently fell through | Promoted to module constant; `rank_legs(line_tolerance=...)` parameter; `--line-tolerance` CLI flag; `UD_LINE_TOLERANCE` env var; `SharpMatch.match_distance` for fuzzy-match confidence | 7 (`test_audit_p1_line_tolerance.py`) |
+
+**Deferred (P0 #7):** Side-flip evaluation. The pipeline always picks the fantasy
+favorite, then asks whether sharp agrees. It never flips to the fantasy underdog
+when sharp prefers that side. This is a real (separate) edge class; needs a
+ranking pipeline rewrite. Out of scope for this remediation wave.
+
+**Test additions:** 383 tests total = 298 (pre-audit) + 8 (P0 #1) + 6 (P0 #2) +
+18 (P1 #3) + 6 (P1 #4) + 3 (P1 #5) + 7 (P1 #6) + ... + remaining adjustments.
+Ruff clean, `--self-test` 12/12, `--dry-run` OK. CI green.
 
 ## For other agents — operating manual
 
