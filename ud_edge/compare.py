@@ -160,8 +160,14 @@ def compare_fantasy_vs_sharp(
     fantasy_csvs: Optional[list[tuple[Path, str]]] = None,
     n_entries: int = 4,
     force_fetch: bool = True,
-) -> dict:
-    """Run the full comparison and return a dashboard-ready payload."""
+    return_ranked: bool = False,
+):
+    """Run the full comparison and return a dashboard-ready payload.
+
+    When return_ranked=True, returns a tuple (payload, ranked_list) so the
+    dashboard can hand the live RankedLeg objects to the lineup selector
+    without losing fields like line_id / player_id / match_id.
+    """
     root = _project_root()
     data_dir = root / "data"
     entry = UD_PAYOUTS[entry_type]
@@ -298,7 +304,7 @@ def compare_fantasy_vs_sharp(
             },
         })
 
-    return {
+    payload = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
         "entry_type": entry_type,
         "min_true_prob": min_true_prob,
@@ -340,3 +346,6 @@ def compare_fantasy_vs_sharp(
             "entry_type": entry_type,
         },
     }
+    if return_ranked:
+        return payload, ranked
+    return payload

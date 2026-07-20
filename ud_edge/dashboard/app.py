@@ -52,6 +52,11 @@ app.add_middleware(
 
 # In-memory cache of last comparison (avoids re-fetch on every tab click)
 _CACHE: dict = {"payload": None, "key": None}
+# Side-cache: stores the actual RankedLeg list keyed by cache_key so that
+# /api/lineups can rebuild lineups without having to reconstruct Pydantic
+# objects from the JSON payload (which loses fields like line_id,
+# player_id, match_id, higher_american, etc.).
+_RANKED_CACHE: dict[str, list] = {}
 
 # ── Raw props cache: keyed by sport, 60-second TTL ─────────────────────────
 _RAW_PROPS_CACHE: dict = {"data": None, "key": None, "fetched_at": 0.0}
@@ -132,9 +137,17 @@ def opportunities(
         mispriced_only=mispriced_only,
         n_entries=n_entries,
         force_fetch=refresh or _CACHE.get("payload") is None,
+        return_ranked=True,
     )
+    # compare_fantasy_vs_sharp returns (payload_dict, ranked_list) when
+    # return_ranked=True. The ranked list is stored separately for lineups.
+    if isinstance(payload, tuple):
+        payload, ranked = payload
+    else:
+        ranked = []
     _CACHE["payload"] = payload
     _CACHE["key"] = key
+    _RANKED_CACHE[key] = ranked
     return JSONResponse(payload)
 
 
@@ -305,51 +318,58 @@ def lineup_suggestions(
         from ud_edge.copy_format import opportunities_to_dict, format_block
         from ud_edge.flex_math import UD_PAYOUTS
 
-        # Reconstruct RankedLeg objects from the cached payload's flat list
-        from ud_edge.models import RankedLeg, Leg
+        # Pull the live ranked legs directly from the side-cache so we don't
+        # have to reconstruct Pydantic objects from a JSON payload that has
+        # already lost line_id / player_id / match_id / higher_american etc.
+        # This is the round-trip-safe path.
+        cache_key = _CACHE.get("key")
+        ranked: list = _RANKED_CACHE.get(cache_key, [])
+        if not ranked:
+            # Fallback: derive from flat payload (best-effort)
+            from ud_edge.models import RankedLeg, Leg
 
-        flat = payload.get("flat", [])
-        ranked: list[RankedLeg] = []
-        for d in flat:
-            leg_dict = d.get("leg", {})
-            leg = Leg(
-                line_id=leg_dict.get("line_id", ""),
-                player_id=leg_dict.get("player_id", ""),
-                player_name=leg_dict.get("player_name", ""),
-                sport_id=leg_dict.get("sport_id", ""),
-                match_title=leg_dict.get("match_title"),
-                match_id=leg_dict.get("match_id"),
-                scheduled_at=leg_dict.get("scheduled_at"),
-                stat_name=leg_dict.get("stat_name", "points"),
-                line_value=float(leg_dict.get("line_value") or 0),
-                line_type=leg_dict.get("line_type", "balanced"),
-                higher_american=leg_dict.get("higher_american", -110),
-                higher_decimal=float(leg_dict.get("higher_decimal") or 1.91),
-                higher_multiplier=leg_dict.get("higher_multiplier", 0.9),
-                lower_american=leg_dict.get("lower_american", -110),
-                lower_decimal=float(leg_dict.get("lower_decimal") or 1.91),
-                lower_multiplier=leg_dict.get("lower_multiplier", 0.9),
-                fantasy_source=leg_dict.get("fantasy_source"),
-            )
-            ranked.append(
-                RankedLeg(
-                    leg=leg,
-                    higher_true_prob=d.get("higher_true_prob"),
-                    higher_implied_prob=d.get("higher_implied_prob"),
-                    higher_edge_pp=d.get("higher_edge_pp"),
-                    lower_true_prob=d.get("lower_true_prob"),
-                    lower_implied_prob=d.get("lower_implied_prob"),
-                    lower_edge_pp=d.get("lower_edge_pp"),
-                    picked_side=d.get("picked_side", "higher"),
-                    picked_true_prob=d.get("picked_true_prob", 0.5),
-                    picked_edge_pp=d.get("picked_edge_pp", 0.0),
-                    overround=d.get("overround", 1.0),
-                    sharp_true_prob=d.get("sharp_true_prob"),
-                    sharp_book=d.get("sharp_book"),
-                    sharp_overround=d.get("sharp_overround"),
-                    mispricing_edge_pp=d.get("mispricing_edge_pp"),
+            flat = payload.get("flat", [])
+            for d in flat:
+                leg_dict = d.get("leg", {})
+                leg = Leg(
+                    line_id=leg_dict.get("line_id", ""),
+                    player_id=leg_dict.get("player_id", ""),
+                    player_name=leg_dict.get("player_name", ""),
+                    sport_id=leg_dict.get("sport_id", ""),
+                    match_title=leg_dict.get("match_title"),
+                    match_id=leg_dict.get("match_id"),
+                    scheduled_at=leg_dict.get("scheduled_at"),
+                    stat_name=leg_dict.get("stat_name", "points"),
+                    line_value=float(leg_dict.get("line_value") or 0),
+                    line_type=leg_dict.get("line_type", "balanced"),
+                    higher_american=leg_dict.get("higher_american", -110),
+                    higher_decimal=float(leg_dict.get("higher_decimal") or 1.91),
+                    higher_multiplier=leg_dict.get("higher_multiplier", 0.9),
+                    lower_american=leg_dict.get("lower_american", -110),
+                    lower_decimal=float(leg_dict.get("lower_decimal") or 1.91),
+                    lower_multiplier=leg_dict.get("lower_multiplier", 0.9),
+                    fantasy_source=leg_dict.get("fantasy_source") or "",
+                    team_id=leg_dict.get("team_id"),
                 )
-            )
+                ranked.append(
+                    RankedLeg(
+                        leg=leg,
+                        higher_true_prob=d.get("higher_true_prob"),
+                        higher_implied_prob=d.get("higher_implied_prob") or 0.0,
+                        higher_edge_pp=d.get("higher_edge_pp") or 0.0,
+                        lower_true_prob=d.get("lower_true_prob"),
+                        lower_implied_prob=d.get("lower_implied_prob") or 0.0,
+                        lower_edge_pp=d.get("lower_edge_pp") or 0.0,
+                        picked_side=d.get("picked_side", "higher"),
+                        picked_true_prob=d.get("picked_true_prob", 0.5),
+                        picked_edge_pp=d.get("picked_edge_pp", 0.0),
+                        overround=d.get("overround", 1.0),
+                        sharp_true_prob=d.get("sharp_true_prob"),
+                        sharp_book=d.get("sharp_book"),
+                        sharp_overround=d.get("sharp_overround"),
+                        mispricing_edge_pp=d.get("mispricing_edge_pp"),
+                    )
+                )
 
         if not ranked:
             return JSONResponse({"error": "No ranked legs available"}, status_code=404)
