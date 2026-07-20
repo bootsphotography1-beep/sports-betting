@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Optional
 
 from ud_edge.copy_format import format_block, opportunities_to_dict
-from ud_edge.flex_math import UD_PAYOUTS
-from ud_edge.matcher import rank_legs, build_lineups
+from ud_edge.flex_math import UD_PAYOUTS, expected_value_per_card
+from ud_edge.matcher import effective_true_prob, rank_legs, build_lineups
 from ud_edge.models import Leg, RankedLeg
 from ud_edge.safety_gate import safety_status
 from ud_edge.sharp_books_client import build_sharp_index
@@ -290,12 +290,18 @@ def compare_fantasy_vs_sharp(
     lineups = build_lineups(ranked, n_entries=n_entries, n_legs=entry.n_legs)
     lineup_payload = []
     for i, lineup in enumerate(lineups, 1):
+        # Audit P0: avg_true_prob uses effective_true_prob (sharp when matched);
+        # win_prob/ev/median_payout use expected_value_per_card (heterogeneous exact).
+        per_leg = [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup]
+        avg_prob = sum(per_leg) / len(per_leg)
+        ev, win_prob, median_payout = expected_value_per_card(entry, per_leg)
         lineup_payload.append({
             "entry": i,
             "n_legs": len(lineup),
-            "avg_true_prob": round(
-                sum(r.picked_true_prob for r in lineup) / len(lineup), 4
-            ),
+            "avg_true_prob": round(avg_prob, 4),
+            "win_prob": round(win_prob, 4) if win_prob else None,
+            "median_payout": median_payout,
+            "ev": round(ev, 4) if ev is not None else None,
             "opportunities": [opportunities_to_dict(r, break_even=entry.break_even) for r in lineup],
             "copy": {
                 "prizepicks": format_block(lineup, "prizepicks", include_header=True),

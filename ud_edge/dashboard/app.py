@@ -384,21 +384,25 @@ def lineup_suggestions(
 
         # Build correlation reports for each lineup
         from ud_edge.correlation import analyze_slip
-        from ud_edge.flex_math import expected_value as calc_ev
+        from ud_edge.flex_math import expected_value_per_card
+        from ud_edge.matcher import effective_true_prob
 
         lineups_payload = []
         all_warnings: list[dict] = []
         for i, lineup in enumerate(result.lineups, 1):
             report = analyze_slip(lineup)
-            avg_prob = sum(r.picked_true_prob for r in lineup) / len(lineup)
-            ev, win_prob, med = calc_ev(entry_obj, avg_prob)
+            # Audit P0: avg uses effective_true_prob (sharp when matched);
+            # win_prob/ev/median_payout use expected_value_per_card (heterogeneous exact).
+            per_leg = [effective_true_prob(r.picked_true_prob, r.sharp_true_prob) for r in lineup]
+            avg_prob = sum(per_leg) / len(per_leg)
+            ev, win_prob, med = expected_value_per_card(entry_obj, per_leg)
             lineups_payload.append({
                 "entry": i,
                 "n_legs": len(lineup),
                 "avg_true_prob": round(avg_prob, 4),
                 "win_prob": round(win_prob, 4) if win_prob else None,
                 "median_payout": med,
-                "ev": round(ev, 4) if ev else None,
+                "ev": round(ev, 4) if ev is not None else None,
                 "opportunities": [opportunities_to_dict(r, break_even=entry_obj.break_even) for r in lineup],
                 "copy": {
                     "prizepicks": format_block(lineup, "prizepicks", include_header=True),
