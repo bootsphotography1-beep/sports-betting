@@ -224,11 +224,13 @@ Dev:
 
 | Entry | Payouts | Break-even | Verdict |
 |---|---|---|---|
-| 3-man-power | 3/3 = 6× | 54.95% | **Best risk/reward** for daily picks |
-| 4-man-power | 4/4 = 10× | 63.00% | Skip — too high a bar |
-| 4-flex | 4/4=6×, 3/4=1.5× | 57.81% | OK if you have 4 strong legs |
-| 5-flex | 5/5=10×, 4/5=4×, 3/5=2× | 57.81% | Better than 4-flex for variance |
-| **6-flex** | **6/6=25×, 5/6=2×, 4/6=0.4×** | **52.40%** | High variance, low break-even |
+| 2-man-power | 2/2 = 3× | 57.74% | High-variance small slip |
+| 3-man-power | 3/3 = 6× | 55.03% | **Best risk/reward** for daily picks |
+| 4-man-power | 4/4 = 10× | 56.23% | Skip — too high a bar |
+| 3-flex | 3/3=6×, 2/3=1× | 47.53% | Generous partials, but tiny edge |
+| 4-flex | 4/4=6×, 3/4=1.5× | 55.03% | OK if you have 4 strong legs |
+| 5-flex | 5/5=10×, 4/5=4×, 3/5=2× | 42.16% | Better than 4-flex for variance (3/5=2× is generous) |
+| **6-flex** | **6/6=25×, 5/6=2×, 4/6=0.4×** | **54.21%** | High variance, low break-even |
 
 The 6-flex break-even is solved numerically (`flex_math.solve_break_even`)
 to **0.5421** (verified Wave 1; was incorrectly 0.5240 before audit).
@@ -399,7 +401,7 @@ docs/                         # PAYOUT_RULES.md (TODO), design notes
 
 ## Test & quality gates
 
-- **298/298 tests pass** locally on Windows + Python 3.11.9 (`pytest -q`)
+- **365/365+ tests pass** locally on Windows + Python 3.11.9 (`pytest -q`)
 - **`ruff check .` is clean** (0 findings)
 - **Smoke verification** — dashboard returns:
   - `200` for `/`, `/api/health`, `/HONEST_STATUS.md`

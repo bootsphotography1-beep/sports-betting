@@ -40,7 +40,7 @@ book's pricing is *their* probability estimate, *plus* vig.
 After stripping vig, you get the book's best estimate of the true
 probability. **The favorite side (≥50%) is more likely to hit than the
 underdog side**, even after you account for vig. Taking the favorite at
-real probability 54.69% in a 3-man-power (54.95% break-even) is roughly
+real probability 54.69% in a 3-man-power (55.03% break-even) is roughly
 EV-neutral. Taking it at 60% in the same entry is +EV.
 
 ## Why the bot uses Underdog's own odds
@@ -65,12 +65,25 @@ the pipeline is unchanged.
 
 ## Entry-type math
 
+Break-even values come from `UD_PAYOUTS` in `ud_edge/flex_math.py` (numerically solved).
+EV values come from `expected_value(entry, p)` for a uniform card at `p` per leg.
+
 | Entry | n | Payouts | Per-leg break-even | EV at 55% / 60% |
 |---|---|---|---|---|
-| 3-man-power | 3 | 3/3 = 6× | 54.95% | -0.002 / +0.296 |
-| 4-flex | 4 | 4/4=6×, 3/4=1.5× | 57.81% | -0.082 / +0.190 |
-| 5-flex | 5 | 5/5=10×, 4/5=4×, 3/5=2× | 57.81% | -0.143 / +0.151 |
-| 6-flex | 6 | 6/6=25×, 5/6=2×, 4/6=0.4× | 52.40% | +0.066 / +0.585 |
+| 2-man-power | 2 | 2/2 = 3× | 57.74% | -0.092 / +0.080 |
+| 3-man-power | 3 | 3/3 = 6× | 55.03% | -0.002 / +0.296 |
+| 4-man-power | 4 | 4/4 = 10× | 56.23% | -0.085 / +0.296 |
+| 3-flex | 3 | 3/3=6×, 2/3=1× | 47.53% | +0.407 / +0.728 |
+| 4-flex | 4 | 4/4=6×, 3/4=1.5× | 55.03% | -0.002 / +0.296 |
+| 5-flex | 5 | 5/5=10×, 4/5=4×, 3/5=2× | 42.16% | +1.001 / +1.506 |
+| 6-flex | 6 | 6/6=25×, 5/6=2×, 4/6=0.4× | 54.21% | +0.075 / +0.664 |
+
+**Caveat (calibration gap):** these EV numbers assume the payout model is
+correct. As of 2026-07-20, `_PAYOUT_MODEL_VERIFIED = False` in
+`ud_edge/safety_gate.py` — the multipliers above are model output, not
+verified against official Underdog rules. Until 50+ settled legs and a
+`docs/PAYOUT_RULES.md` archive exist, treat EV as an *estimate*, not a
+bankroll number.
 
 (EV is net per $1 staked, accounting for the full binomial distribution.)
 
