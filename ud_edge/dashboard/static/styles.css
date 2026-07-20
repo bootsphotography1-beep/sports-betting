@@ -518,6 +518,31 @@ body {
   color: var(--muted);
 }
 
+.safety-banner {
+  margin: 0.75rem 0 0.25rem;
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius);
+  background: var(--warn-soft);
+  border: 1px solid rgba(154, 91, 18, 0.25);
+  color: var(--warn);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  max-width: 680px;
+}
+
+.safety-banner strong {
+  font-weight: 700;
+}
+
+.safety-banner em {
+  font-style: italic;
+}
+
+.safety-banner a {
+  color: var(--warn);
+  font-weight: 600;
+}
+
 .toast {
   position: fixed;
   left: 50%;

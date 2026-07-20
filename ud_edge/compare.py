@@ -14,6 +14,7 @@ from ud_edge.copy_format import format_block, opportunities_to_dict
 from ud_edge.flex_math import UD_PAYOUTS
 from ud_edge.matcher import rank_legs, build_lineups
 from ud_edge.models import Leg, RankedLeg
+from ud_edge.safety_gate import safety_status
 from ud_edge.sharp_books_client import build_sharp_index
 from ud_edge.ud_client import UDClient
 
@@ -289,6 +290,7 @@ def compare_fantasy_vs_sharp(
         "min_edge_pp": min_edge_pp,
         "full_game_only": full_game_only,
         "mispriced_only": mispriced_only,
+        "safety_status": safety_status(),
         "totals": {
             "legs_scanned": len(legs),
             "opportunities": len(ranked),

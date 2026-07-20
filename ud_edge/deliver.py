@@ -1,13 +1,16 @@
 """Markdown + console output for the daily pick report."""
 from __future__ import annotations
 from datetime import datetime, timezone
-from ud_edge.models import RankedLeg, Leg
-from ud_edge.flex_math import UD_PAYOUTS, expected_value, recommend_entry
+from ud_edge.copy_format import format_block, opportunities_to_dict
+from ud_edge.flex_math import UD_PAYOUTS, expected_value
 from ud_edge.matcher import get_player_status
+from ud_edge.models import Leg, RankedLeg
+from ud_edge.safety_gate import recommendation_label, is_research_mode
 
 
-# Per-entry recommendation thresholds: print the cheapest leg's true prob
-# so Fin knows the floor of each card.
+# Dead code — kept for migration reference only.
+# The ENTRY_RECOMMENDATION thresholds are superseded by safety_gate.recommendation_label
+# which respects is_research_mode() and downgrades all labels to RESEARCH ESTIMATE variants.
 ENTRY_RECOMMENDATION = {
     0.10: "🟢 STRONG PLAY",
     0.03: "🟡 PLAY",
@@ -75,7 +78,12 @@ def build_report(
         if top_legs else 0.0
     )
     ev, win_prob, median_payout = expected_value(entry, avg_prob) if top_legs else (0, 0, 0)
-    rec = recommend_entry(entry, avg_prob) if top_legs else "skip"
+    ev_str = f"**{ev:+.4f}**"
+    win_str = f"**{win_prob:.1%}**"
+    if is_research_mode():
+        ev_str = f"**{ev:+.4f}** ⚠️ unverified"
+        win_str = f"**{win_prob:.1%}** ⚠️ unverified"
+    rec = recommendation_label(ev, win_prob) if top_legs else "🔴 SKIP (research only)"
 
     # Count mispricings detected
     n_mispricings = sum(1 for r in top_legs if r.sharp_true_prob is not None)
@@ -90,9 +98,16 @@ def build_report(
     md.append(f"_Entry: **{entry.name}** | Target true-prob: ≥{min_true_prob:.0%} per leg "
               f"| Source: Underdog Fantasy `/beta/v5/over_under_lines`_")
     md.append("")
+    if is_research_mode():
+        md.append(
+            "⚠️ **UNVERIFIED RESEARCH ESTIMATES** — EV/$ and win% below are "
+            "unverified model output. Do not treat as actionable +EV until "
+            "≥50 settled legs and payout model verified (Wave 1)."
+        )
+        md.append("")
     md.append(f"**Top {len(top_legs)} legs** "
-              f"(avg true prob: **{avg_prob:.2%}**, EV per $1: **{ev:+.4f}**, "
-              f"win prob: **{win_prob:.1%}**, median payout: **{median_payout:.1f}x**, "
+              f"(avg true prob: **{avg_prob:.2%}**, EV per $1: {ev_str}, "
+              f"win prob: {win_str}, median payout: **{median_payout:.1f}x**, "
               f"rec: **{rec}**){mispricing_summary}")
     md.append("")
     md.append("| # | Sport | Player | Match | Pick | UD True | Sharp True | Δ (pp) | Sharp Book |")
@@ -183,18 +198,30 @@ def build_multi_report(
     if len(lineups) > 1:
         md.append("## At-a-glance")
         md.append("")
-        md.append("| Entry | Avg True% | EV/$1 | Win% | Med Payout | Rec | Mispricings |")
-        md.append("|-------|-----------|-------|------|------------|-----|-------------|")
+        if is_research_mode():
+            md.append(
+                "⚠️ **UNVERIFIED RESEARCH ESTIMATES** — EV/$ and win% below are "
+                "unverified model output. Do not treat as actionable +EV until "
+                "≥50 settled legs and payout model verified (Wave 1)."
+            )
+            md.append("")
+        md.append("| Entry | Avg True% | EV/$1 | Win% | Rec | Mispricings |")
+        md.append("|-------|-----------|-------|------|-----|-------------|")
         for i, lineup in enumerate(lineups, 1):
             def effective_prob(r):
                 return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
             avg_prob = sum(effective_prob(r) for r in lineup) / len(lineup)
             ev, win_prob, med = expected_value(entry, avg_prob)
-            rec = _recommend_from_ev(ev)
+            rec = recommendation_label(ev, win_prob)
             n_mis = sum(1 for r in lineup if r.sharp_true_prob is not None)
             mis_str = str(n_mis) if n_mis > 0 else "—"
-            md.append(f"| **#{i}** | {avg_prob:.2%} | {ev:+.4f} | {win_prob:.1%} | "
-                      f"{med:.1f}x | {rec} | {mis_str} |")
+            ev_str = f"{ev:+.4f}"
+            win_str = f"{win_prob:.1%}"
+            if is_research_mode():
+                ev_str = f"**{ev_str}** ⚠️ unverified"
+                win_str = f"**{win_str}** ⚠️ unverified"
+            md.append(f"| **#{i}** | {avg_prob:.2%} | {ev_str} | {win_str} | "
+                      f"{rec} | {mis_str} |")
         md.append("")
         md.append("---")
         md.append("")
@@ -205,7 +232,7 @@ def build_multi_report(
             return max(r.picked_true_prob, r.sharp_true_prob or 0.0) if r.sharp_true_prob else r.picked_true_prob
         avg_prob = sum(effective_prob(r) for r in lineup) / len(lineup)
         ev, win_prob, median_payout = expected_value(entry, avg_prob)
-        rec = _recommend_from_ev(ev)
+        rec = recommendation_label(ev, win_prob)
 
         # Min true prob on this card (the floor — worst leg)
         min_leg_prob = min(effective_prob(r) for r in lineup)
@@ -213,8 +240,13 @@ def build_multi_report(
 
         md.append(f"## Entry #{i} — {entry.name}")
         md.append("")
+        ev_str = f"**{ev:+.4f}**"
+        win_str = f"**{win_prob:.1%}**"
+        if is_research_mode():
+            ev_str = f"**{ev:+.4f}** ⚠️ unverified"
+            win_str = f"**{win_prob:.1%}** ⚠️ unverified"
         md.append(f"**Avg true prob: {avg_prob:.2%}** (floor: **{min_leg_prob:.2%}**) · "
-                  f"EV: **{ev:+.4f}** per $1 · win prob: **{win_prob:.1%}** · "
+                  f"EV: {ev_str} per $1 · win prob: {win_str} · "
                   f"median payout: **{median_payout:.1f}x** · "
                   f"**{rec}**"
                   + (f" · **{n_mis} mispricing{'s' if n_mis != 1 else ''}**" if n_mis else ""))
