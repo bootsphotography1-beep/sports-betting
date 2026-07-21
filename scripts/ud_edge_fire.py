@@ -301,14 +301,29 @@ def format_message(tier: str, legs: list[dict]) -> str:
     # Filter: keep legs that pass their per-sport min-edge threshold AND
     # have a non-negative edge. Drop opposing-script pairs (correlation)
     # into a separate "DO NOT PAIR" subsection below.
+    #
+    # 2026-07-21 (Fin spec): only include sharp edges (vs_sharp). Fantasy-only
+    # legs (no sharp book matched) used to flow through as
+    # "edge vs break-even [fantasy-only]" lines, but they can recommend bets
+    # that the destination fantasy book never actually posts (the McCarthy
+    # 1.5-Hits incident). Dropping them here means the report only fires on
+    # edges a sharp book confirmed — fewer false positives, emptier reports
+    # during sparse-prop windows.
     kept_legs = []
+    sharp_only_dropped = 0
     for leg in legs:
+        if leg.get("edge_kind") != "vs_sharp":
+            sharp_only_dropped += 1
+            continue
         ev = leg.get("ev") or 0
         if ev < 0:
             continue  # fantasy is overpriced; skip
         if ev < _min_edge_for(leg):
             continue
         kept_legs.append(leg)
+    if sharp_only_dropped:
+        print(f"[ud_edge_fire] dropped {sharp_only_dropped} fantasy-only legs "
+              f"(sharp-only filter, 2026-07-21 Fin spec)")
 
     # Correlation grouping: cluster same-match positive-ρ legs together
     # and pull fighting pairs (same-game, same-stat, opposite sides) into a

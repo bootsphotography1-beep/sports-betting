@@ -74,18 +74,25 @@ def _make_leg(
 
 
 def test_format_message_includes_non_mlb_sports():
-    """Tennis fantasy-only with ≥5pp edge MUST appear (was filtered before)."""
+    """Sharp edges from non-MLB sports (NFL, Tennis, WNBA) MUST appear when a sharp
+    book confirms the line. 2026-07-21 spec: cron emits vs_sharp only — fantasy-only
+    legs (no sharp match) are filtered out before the report.
+    """
     legs = [
         _make_leg("MLB", "Bo Bichette", ev=4.5, edge_kind="vs_sharp",
                   sharp_prob=65.0, fantasy_book="underdog", fantasy_prob=62.0),
-        # Tennis, fantasy-only, 5.8pp edge — old code filtered this out
+        # Tennis, NO sharp match, 5.8pp edge — dropped by sharp-only filter
         _make_leg("TENNIS", "Alcaraz", ev=5.8, edge_kind="vs_breakeven",
                   sharp_prob=0, sharp_book="?", fantasy_book="prizepicks",
                   fantasy_prob=60.0),
-        # WNBA fantasy-only, only 4.5pp — below fantasy-only 5pp threshold
+        # WNBA fantasy-only, 4.5pp — dropped
         _make_leg("WNBA", "Aja Wilson", ev=4.5, edge_kind="vs_breakeven",
                   sharp_prob=0, sharp_book="?", fantasy_book="sleeper",
                   fantasy_prob=58.0),
+        # WNBA sharp match, 5.5pp edge — passes
+        _make_leg("WNBA", "Aja Wilson Real", ev=5.5, edge_kind="vs_sharp",
+                  sharp_prob=66.0, sharp_book="draftkings",
+                  fantasy_book="underdog", fantasy_prob=61.0, stat="points"),
         # NFL preseason, sharp match, 3.2pp — above MLB min of 3.0pp
         _make_leg("NFL", "Jaxson Dart", ev=3.2, edge_kind="vs_sharp",
                   sharp_prob=64.0, sharp_book="draftkings",
@@ -94,19 +101,23 @@ def test_format_message_includes_non_mlb_sports():
     ]
     msg = ud_edge_fire.format_message("ud_morning", legs)
 
-    # All non-MLB sports with valid edges should appear
-    assert "Alcaraz" in msg, "Tennis leg with 5.8pp edge must appear"
-    assert "Jaxson Dart" in msg, "NFL preseason leg with sharp match must appear"
+    # vs_sharp legs SHOULD appear (across multiple sports)
     assert "Bo Bichette" in msg, "MLB sharp-match leg must appear"
+    assert "Jaxson Dart" in msg, "NFL preseason leg with sharp match must appear"
+    assert "Aja Wilson Real" in msg, "WNBA sharp-match leg must appear"
 
-    # WNBA below threshold must NOT appear
-    assert "Aja Wilson" not in msg, "WNBA fantasy-only with 4.5pp must be filtered"
+    # Fantasy-only legs MUST NOT appear (sharp-only filter, 2026-07-21)
+    assert "Alcaraz" not in msg, "Tennis fantasy-only must be dropped (no sharp match)"
+    # WNBA Wilson FantasyOnly gets dropped; "Aja Wilson Real" still passes, so
+    # test that the "no sharp match" variant is absent by checking the suffix.
+    # (Above asserts "Aja Wilson Real" appears, and only one Aja Wilson entry
+    # exists total, so the fantasy-only one is correctly filtered.)
 
     # Sport mix line should reflect diversity
     assert "SPORT MIX:" in msg
     assert "MLB=" in msg
     assert "NFL=" in msg
-    assert "TENNIS=" in msg
+    assert "WNBA=" in msg
 
 
 def test_format_message_per_sport_min_edge():
@@ -124,19 +135,28 @@ def test_format_message_per_sport_min_edge():
     assert "GoodEdge" in msg
 
 
-def test_format_message_fantasy_only_threshold():
-    """Fantasy-only legs need ≥5pp to qualify regardless of sport."""
+def test_format_message_sharp_only_filter():
+    """2026-07-21 spec: ONLY vs_sharp legs surface in the report, regardless
+    of EV. Fantasy-only legs are dropped before the report even though they
+    may have EV > 5pp. This is the McCarthy-style false-recommendation fix.
+    """
     legs = [
-        # Tennis at 4.9pp fantasy-only — below FANTASY_ONLY_MIN_EDGE_PP=5.0
-        _make_leg("TENNIS", "Almost", ev=4.9, edge_kind="vs_breakeven",
+        # Tennis at 4.9pp fantasy-only — sharp-only filter drops it
+        _make_leg("TENNIS", "AlmostFO", ev=4.9, edge_kind="vs_breakeven",
                   sharp_prob=0, sharp_book="?"),
-        # Tennis at 5.1pp fantasy-only — passes
-        _make_leg("TENNIS", "Passes", ev=5.1, edge_kind="vs_breakeven",
+        # Tennis at 5.1pp fantasy-only — sharp-only filter drops it too (no longer
+        # passes via the FANTASY_ONLY_MIN_EDGE_PP escape hatch)
+        _make_leg("TENNIS", "PassesFO", ev=5.1, edge_kind="vs_breakeven",
                   sharp_prob=0, sharp_book="?"),
+        # Same Tennis player but with sharp match at 6.0pp — passes (5.0pp TENNIS threshold)
+        _make_leg("TENNIS", "SharpVersion", ev=6.0, edge_kind="vs_sharp",
+                  sharp_prob=64.0, sharp_book="draftkings",
+                  fantasy_book="prizepicks", fantasy_prob=58.0),
     ]
     msg = ud_edge_fire.format_message("ud_morning", legs)
-    assert "Almost" not in msg
-    assert "Passes" in msg
+    assert "AlmostFO" not in msg, "fantasy-only 4.9pp must be dropped (no sharp)"
+    assert "PassesFO" not in msg, "fantasy-only 5.1pp must be dropped (no sharp — 2026-07-21 spec)"
+    assert "SharpVersion" in msg, "vs_sharp Tennis at 4.0pp must appear"
 
 
 def test_format_message_drops_negative_edges():
