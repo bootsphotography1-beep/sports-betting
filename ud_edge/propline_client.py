@@ -87,7 +87,13 @@ class PropLineClient:
         self,
         api_key: Optional[str] = None,
         cache_path: Optional[Path] = None,
-        ttl_seconds: int = 90,
+        # TTL: 2026-07-21 spec — operator wants live data only (no TTL fast-path).
+        # Stale-on-failure fallback at lines 137-146 still kicks in during a
+        # PropLine 429/5xx outage so the cron can survive rate limits, but
+        # under normal conditions every cron fire makes real HTTP calls so the
+        # reports reflect whatever the books are pricing *right now*, not what
+        # they priced 90 seconds ago.
+        ttl_seconds: int = 0,
     ):
         key = api_key or os.environ.get("PROPLINE_API_KEY", "")
         if not key:
