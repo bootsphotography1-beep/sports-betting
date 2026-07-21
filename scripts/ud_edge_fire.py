@@ -239,10 +239,21 @@ def parse_legs(payload: dict, fantasy_lookup: dict) -> list[dict]:
             else:
                 primary_edge = float(ud_pp)
                 edge_kind = "vs_breakeven"
-            # Determine which fantasy book to actually bet on: the one with the
-            # LOWEST true_prob (most generous payout for the bettor).
+            # Determine which fantasy book to actually bet on:
+            #  - For vs_sharp legs: pick the book whose no-vig prob is CLOSEST to
+            #    sharp (most reliable price — a book lagging sharp by 15pp is
+            #    likely missing one side and using a synthetic 50% default).
+            #  - For fantasy-only legs: fall back to LOWEST true_prob (best payout
+            #    for the bettor, since there's no sharp to compare against).
             if merged_fb:
-                best_fb_name = min(merged_fb, key=merged_fb.get)
+                if edge_kind == "vs_sharp" and best_sb_prob > 0:
+                    sharp_pct = best_sb_prob
+                    best_fb_name = min(
+                        merged_fb,
+                        key=lambda bk: abs(merged_fb[bk] * 100 - sharp_pct),
+                    )
+                else:
+                    best_fb_name = min(merged_fb, key=merged_fb.get)
                 best_fb_prob = round(merged_fb[best_fb_name] * 100, 1)
             else:
                 ud_prob = opp.get("ud_true_prob") or opp.get("lower_true_prob") or 0
@@ -433,6 +444,9 @@ def format_message(tier: str, legs: list[dict]) -> str:
         f"*BOOK BREAKDOWN:* UD={book_counts['underdog']} PP={book_counts['prizepicks']} SL={book_counts['sleeper']} DA={book_counts['dabble']} (legs that book covered)",
         f"*SPORT MIX:* {sport_str or '(none)'}",
         f"*VERDICT:* {len(kept_legs)} picks | {len(fighting_legs)} corr-warn | dashboard: {DASHBOARD}",
+        "",
+        "⚠️ _VERIFY ON APP: fantasy books drop Less sides mid-day as players lock. "
+        "If the Less button isn't on the app for any pick above, skip it._",
     ]
 
     msg = "\n".join(msg_lines)

@@ -564,3 +564,88 @@ def test_format_message_no_discrepancy_tag_when_normal():
     assert "NormalEdge" in msg
     assert "LAGGED" not in msg
     assert "STALE LINE" not in msg
+
+
+# ── Test 10: destination-book proximity logic (2026-07-21 fix) ─────────
+
+
+def test_parse_legs_picks_book_closest_to_sharp_for_vs_sharp_legs():
+    """For vs_sharp legs, pick the fantasy book whose no-vig prob is CLOSEST to
+    sharp — not the most-extreme price. Catches the PF-50%-synthetic-default
+    failure mode where PF's missing-side default 50% creates a fake 15pp edge
+    but PF doesn't actually offer that side at the app.
+
+    Tyler Freeman TB 1.5 Under: sharp 62%, PF 50% (synthetic), Sleeper 61%.
+    The bot should pick Sleeper (closest to sharp), not PF (lowest = best payout
+    but unreliable).
+    """
+    # Build a synthetic payload that mimics compare_fantasy_vs_sharp output
+    payload = {
+        "sports": [{
+            "sport": "MLB",
+            "opportunities": [{
+                "player_name": "Tyler Freeman",
+                "stat_name": "total_bases",
+                "line_value": 1.5,
+                "side_label": "Under",
+                "ud_true_prob": 0.528,
+                "lower_true_prob": 0.50,
+                "sharp_books": {"pinnacle": 0.622},
+                "fantasy_books": {
+                    "prizepicks": 0.50,
+                    "sleeper": 0.608,
+                    "underdog": 0.528,
+                },
+                "mispricing_edge_pp": 12.2,
+                "ud_edge_pp": 9.36,
+                "match_title": "COL @ WSH",
+            }]
+        }]
+    }
+    # Empty fantasy_lookup — secondary path is unused here
+    fantasy_lookup = {}
+    legs = ud_edge_fire.parse_legs(payload, fantasy_lookup)
+    assert len(legs) == 1
+    leg = legs[0]
+    assert leg["fantasy_book"] == "sleeper", (
+        f"Expected Sleeper (closest to sharp at 60.8% vs 62.2%), got "
+        f"{leg['fantasy_book']} at {leg['fantasy_prob']}%. "
+        f"With the old 'lowest true_prob' rule, the bot would have picked "
+        f"PF (50%) which is the synthetic default and unplaceable on the app."
+    )
+    assert leg["fantasy_prob"] == 60.8
+
+
+def test_parse_legs_picks_lowest_prob_for_fantasy_only_legs():
+    """For fantasy-only legs (no sharp), fall back to lowest true_prob (best
+    payout for bettor). Sharp-proximity rule doesn't apply when there's no
+    sharp to compare against.
+    """
+    payload = {
+        "sports": [{
+            "sport": "TENNIS",
+            "opportunities": [{
+                "player_name": "Alcaraz",
+                "stat_name": "aces",
+                "line_value": 12.5,
+                "side_label": "Over",
+                "ud_true_prob": 0.58,
+                "lower_true_prob": 0.42,
+                # No sharp_books → fantasy-only
+                "fantasy_books": {
+                    "prizepicks": 0.58,
+                    "sleeper": 0.62,
+                    "underdog": 0.56,
+                },
+                "mispricing_edge_pp": None,
+                "ud_edge_pp": 5.8,
+                "match_title": "Alcaraz vs Sinner",
+            }]
+        }]
+    }
+    legs = ud_edge_fire.parse_legs(payload, fantasy_lookup={})
+    assert len(legs) == 1
+    leg = legs[0]
+    # No sharp → use lowest true_prob → underdog 56%
+    assert leg["fantasy_book"] == "underdog"
+    assert leg["fantasy_prob"] == 56.0
