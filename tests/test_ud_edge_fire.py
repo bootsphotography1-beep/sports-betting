@@ -512,3 +512,55 @@ def test_dabble_unknown_book_does_not_crash():
     msg = ud_edge_fire.format_message("ud_morning", legs)
     assert "DA=0" in msg
     assert "UD=0" in msg
+
+
+# ── Test 9: discrepancy tag (Tyler Freeman-style "STALE LINE" sanity hint) ─
+
+
+def test_format_message_discrepancy_tag_stale_line():
+    """Fantasy book ≥15pp off sharp on counting stat → STALE LINE hint.
+
+    This gives the operator context on WHY the pick exists — not just the
+    raw edge number. Tyler Freeman TB 1.5 Under (PF 50% vs Pin -185 = 65% Under)
+    gets a 15pp gap → STALE LINE tag because Pinnacle is presumably slow to
+    react to a recent slumping stretch (avg last 5 below the line).
+    """
+    legs = [
+        # Freeman-style: 50% vs 65% = 15pp gap → STALE LINE
+        _make_leg("MLB", "Tyler Freeman", ev=9.5, edge_kind="vs_sharp",
+                  fantasy_book="prizepicks", fantasy_prob=50.0,
+                  sharp_book="pinnacle", sharp_prob=65.0,
+                  stat="total_bases", line=1.5, side="Under"),
+    ]
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "Tyler Freeman" in msg
+    assert "STALE LINE" in msg, (
+        f"Expected STALE LINE discrepancy tag (gap ≥ 15pp), got:\n{msg}"
+    )
+
+
+def test_format_message_discrepancy_tag_lagged():
+    """Gap 10-14pp → LAGGED tag (lower-severity than STALE LINE)."""
+    legs = [
+        _make_leg("MLB", "MediumLag", ev=8.0, edge_kind="vs_sharp",
+                  fantasy_book="underdog", fantasy_prob=55.0,
+                  sharp_book="draftkings", sharp_prob=66.0,
+                  stat="hits", line=0.5, side="Over"),
+    ]
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "LAGGED" in msg, f"Expected LAGGED tag (gap 10-14pp), got:\n{msg}"
+    assert "STALE LINE" not in msg  # 11pp < 15pp → no STALE LINE tier
+
+
+def test_format_message_no_discrepancy_tag_when_normal():
+    """Gap < 10pp → no discrepancy tag (edge speaks for itself)."""
+    legs = [
+        _make_leg("MLB", "NormalEdge", ev=4.0, edge_kind="vs_sharp",
+                  fantasy_book="underdog", fantasy_prob=60.0,
+                  sharp_book="draftkings", sharp_prob=64.5,
+                  stat="hits", line=0.5),
+    ]
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "NormalEdge" in msg
+    assert "LAGGED" not in msg
+    assert "STALE LINE" not in msg

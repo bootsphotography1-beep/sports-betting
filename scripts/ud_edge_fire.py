@@ -375,11 +375,28 @@ def format_message(tier: str, legs: list[dict]) -> str:
             sharp_str = " (no sharp match)"
             edge_label = "edge vs break-even"
         edge_kind_tag = "" if leg.get("edge_kind") == "vs_sharp" else " [fantasy-only]"
+        # Discrepancy tag: when sharp and fantasy prices diverge by 15+pp on a
+        # counting stat (hits/TB/RBIs/HRs), the sharp book is likely slow to
+        # react to recent form. Surface it so the operator can see WHY the
+        # pick is being made — not just the raw edge.
+        disc_tag = ""
+        sharp_prob_pct = leg.get("sharp_prob")
+        try:
+            fantasy_prob_pct = float(leg.get("fantasy_prob"))
+            sharp_prob_pct_f = float(sharp_prob_pct) if sharp_prob_pct not in (None, "?") else None
+        except (TypeError, ValueError):
+            sharp_prob_pct_f = None
+        if sharp_prob_pct_f is not None:
+            gap_pp = abs(fantasy_prob_pct - sharp_prob_pct_f)
+            if gap_pp >= 15:
+                disc_tag = " — :fire:**STALE LINE**"
+            elif gap_pp >= 10:
+                disc_tag = " — :mag:LAGGED"
         return (
             f"- {leg['player']} {leg['stat']} {leg['line']}{side_str}{match_str} → "
             f"BET ON **{leg['fantasy_book'].upper()}** "
             f"({leg['fantasy_prob']}%{sharp_str})"
-            f"{extras} — {edge_label} +{leg['ev']}pp{edge_kind_tag}"
+            f"{extras} — {edge_label} +{leg['ev']}pp{edge_kind_tag}{disc_tag}"
         )
 
     # Sort each tier by book (UD → PP → SL) so the operator can place
