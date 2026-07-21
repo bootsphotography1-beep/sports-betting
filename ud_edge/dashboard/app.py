@@ -59,6 +59,10 @@ _CACHE: dict = {"payload": None, "key": None}
 # player_id, match_id, higher_american, etc.).
 _RANKED_CACHE: dict[str, list] = {}
 
+# Dashboard v2: cross-reference of fantasy legs by (player, stat, line) used by
+# opportunities_to_dict() to attach the per-fantasy-book true_prob dict.
+_FANTASY_LOOKUP_CACHE: dict[str, dict] = {}
+
 # ── Raw props cache: keyed by sport, 60-second TTL ─────────────────────────
 _RAW_PROPS_CACHE: dict = {"data": None, "key": None, "fetched_at": 0.0}
 
@@ -143,7 +147,7 @@ def opportunities(
         entry_type=entry,
         min_true_prob=min_true_prob,
         min_edge_pp=min_edge_pp,
-        sport_filter=sport_filter,
+        sport_filter=sport_list if sport else None,
         full_game_only=full_game_only,
         mispriced_only=mispriced_only,
         n_entries=n_entries,
@@ -160,6 +164,24 @@ def opportunities(
     _CACHE["payload"] = payload
     _CACHE["key"] = key
     _RANKED_CACHE[key] = ranked
+
+    # Dashboard v2: cache the per-fantasy-book lookup so /api/lineups and
+    # /api/props can attach fantasy_books {underdog, prizepicks, sleeper}
+    # true_probs to each opp payload.
+    from ud_edge.compare import collect_fantasy_legs
+    import re as _re
+    try:
+        fantasy_legs, _ = collect_fantasy_legs(force_fetch=False)
+        lookup: dict = {}
+        for fl in fantasy_legs:
+            name = _re.sub(r"[^\w\s]", "", (fl.player_name or "").lower()).strip()
+            name = _re.sub(r"\s+", " ", name)
+            key2 = (name, fl.stat_name, fl.line_value)
+            lookup.setdefault(key2, []).append(fl)
+        _FANTASY_LOOKUP_CACHE[key] = lookup
+    except Exception:
+        _FANTASY_LOOKUP_CACHE[key] = {}
+
     return JSONResponse(payload)
 
 
@@ -435,6 +457,10 @@ def lineup_suggestions(
 
         entry_obj = UD_PAYOUTS[entry]
 
+        # Dashboard v2: pull the cached per-fantasy-book lookup so the lineup
+        # payload can attach fantasy_books {underdog, prizepicks, sleeper}.
+        _fantasy_lookup = _FANTASY_LOOKUP_CACHE.get(cache_key, {})
+
         result = select_lineups_for_card(
             ranked,
             prefer_6man=prefer_6man,
@@ -462,7 +488,14 @@ def lineup_suggestions(
                 "win_prob": round(win_prob, 4) if win_prob else None,
                 "median_payout": med,
                 "ev": round(ev, 4) if ev is not None else None,
-                "opportunities": [opportunities_to_dict(r, break_even=entry_obj.break_even) for r in lineup],
+                "opportunities": [
+                    opportunities_to_dict(
+                        r,
+                        break_even=entry_obj.break_even,
+                        fantasy_books_lookup=_fantasy_lookup,
+                    )
+                    for r in lineup
+                ],
                 "copy": {
                     "prizepicks": format_block(lineup, "prizepicks", include_header=True),
                     "sleeper": format_block(lineup, "sleeper", include_header=True),
@@ -483,6 +516,18 @@ def lineup_suggestions(
                     "avg_abs_rho": round(report.avg_abs_rho, 4),
                     "recommend_entry": report.recommend_entry,
                 })
+
+        # Dashboard v2: sort lineups by win_prob DESC (most-likely-first).
+        # Tie-break by avg_true_prob DESC, then by EV DESC.
+        lineups_payload.sort(
+            key=lambda lu: (
+                -(lu.get("win_prob") or 0.0),
+                -(lu.get("avg_true_prob") or 0.0),
+                -(lu.get("ev") or 0.0),
+            )
+        )
+        for i, lu in enumerate(lineups_payload, 1):
+            lu["entry"] = i
 
         dropped_payload = []
         for dropped_leg, reason in result.dropped_legs:

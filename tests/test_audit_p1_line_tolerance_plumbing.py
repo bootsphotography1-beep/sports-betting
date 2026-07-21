@@ -78,10 +78,14 @@ def test_matcher_propagates_match_distance_to_ranked_leg():
 
     # Build a fantasy leg with a non-integer line that won't have an exact
     # sharp match.
+    # scheduled_at must be strictly in the future so Wave 2B's reject_started
+    # filter does not skip the leg before fuzzy matching runs.
+    from datetime import datetime, timedelta, timezone
+    future = (datetime.now(timezone.utc) + timedelta(days=2)).isoformat()
     leg = Leg(
         line_id="line_md", player_id="p_md", player_name="Player MD",
         sport_id="NBA", match_title="A @ B", match_id=1,
-        scheduled_at="2026-07-20T20:00:00+00:00",
+        scheduled_at=future,
         stat_name="points", line_value=27.5, line_type="balanced",
         higher_american=-110, higher_decimal=1.909, higher_multiplier=0.95,
         lower_american=-110, lower_decimal=1.909, lower_multiplier=0.95,

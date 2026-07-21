@@ -323,9 +323,22 @@ def rank_legs(
         # equating fuzzy matches with exact-key matches.
         match_distance: Optional[float] = None
         quarantined = False  # True when sharp disagrees with fantasy by > -2pp
+        # Dashboard v2: collect ALL sharp-book matches (not just the best) so
+        # the UI can show a per-book column grid.
+        sharp_books_per_book: dict = {}
         if sharp_book_index and sharp_policy == "sharp_authoritative_quarantine":
-            from ud_edge.sharp_books_client import find_sharp_match
+            from ud_edge.sharp_books_client import find_sharp_match, find_all_sharp_matches
             sharp_match = find_sharp_match(
+                sharp_book_index,
+                leg.player_name,
+                leg.stat_name,
+                leg.line_value,
+                line_tolerance=line_tolerance,
+                event_title=leg.match_title,
+                scheduled_at=leg.scheduled_at,
+            )
+            # Walk the whole index for per-book view
+            sharp_books_per_book = find_all_sharp_matches(
                 sharp_book_index,
                 leg.player_name,
                 leg.stat_name,
@@ -394,6 +407,7 @@ def rank_legs(
                 sharp_overround=sharp_overround,
                 mispricing_edge_pp=mispricing_edge_pp,
                 match_distance=match_distance,
+                sharp_books_per_book=sharp_books_per_book,
             )
         )
 
@@ -507,7 +521,6 @@ def build_lineups(
     # Deduplicate canonical markets before building lineups
     ranked = dedupe_lineups(ranked)
 
-    n_entries * n_legs
     if len(ranked) < n_legs:
         # Not even one full lineup possible
         return []

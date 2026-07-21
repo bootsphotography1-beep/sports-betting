@@ -128,6 +128,10 @@ class RankedLeg(BaseModel):
     # fuzzy match. Surface on the dashboard so operators see "fuzzy match at
     # 1.5 line gap" instead of treating it like an exact match.
     match_distance: Optional[float] = None
+    # Dashboard v2: per-book sharp-book view. Dict keyed by bookmaker
+    # (e.g. "pinnacle", "circa") with values {"higher", "lower", "line_value",
+    # "match_distance"}. Empty dict when no sharp book matched the leg.
+    sharp_books_per_book: dict = {}
 
 
 class FlexEntryType(BaseModel):

@@ -8,6 +8,57 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from ud_edge.models import RankedLeg
+from ud_edge.no_vig import no_vig
+
+
+def _normalize_player_key(name: str) -> str:
+    """Lowercase + collapse whitespace + strip punctuation for fuzzy player match."""
+    import re
+    s = (name or "").lower().strip()
+    s = re.sub(r"[^\w\s]", "", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _build_fantasy_books(
+    r: RankedLeg,
+    leg,
+    *,
+    fantasy_books_lookup: Optional[dict],
+) -> dict[str, Optional[float]]:
+    """Build the {underdog, prizepicks, sleeper} true_prob dict for a leg.
+
+    Always returns all three keys. Values are:
+    - The no-vig true_prob for the picked side when that book observed the leg
+    - None when that book did NOT offer the same player/stat/line
+    """
+    out: dict[str, Optional[float]] = {"underdog": None, "prizepicks": None, "sleeper": None}
+    # The current leg's source is always present (we read from it directly).
+    src = leg.fantasy_source or "underdog"
+    try:
+        if r.picked_side == "higher":
+            tp, _, _ = no_vig(leg.higher_decimal, leg.lower_decimal)
+        else:
+            _, tp, _ = no_vig(leg.higher_decimal, leg.lower_decimal)
+        out[src] = round(float(tp), 4)
+    except Exception:
+        out[src] = None
+
+    # Walk the lookup for any other fantasy sources covering the same leg.
+    if fantasy_books_lookup:
+        key = (_normalize_player_key(leg.player_name), leg.stat_name, leg.line_value)
+        for other_leg in fantasy_books_lookup.get(key, []):
+            other_src = other_leg.fantasy_source or "underdog"
+            if other_src not in out or out[other_src] is None:
+                try:
+                    if r.picked_side == "higher":
+                        tp, _, _ = no_vig(other_leg.higher_decimal, other_leg.lower_decimal)
+                    else:
+                        _, tp, _ = no_vig(other_leg.higher_decimal, other_leg.lower_decimal)
+                    out[other_src] = round(float(tp), 4)
+                except Exception:
+                    out[other_src] = None
+    return out
 
 
 # Display labels for stat types across platforms
@@ -254,8 +305,18 @@ def explain_pick(r: RankedLeg, break_even: float = 0.524) -> dict:
     }
 
 
-def opportunities_to_dict(r: RankedLeg, break_even: float = 0.524) -> dict:
-    """Serialize a RankedLeg for the dashboard JSON API."""
+def opportunities_to_dict(
+    r: RankedLeg,
+    break_even: float = 0.524,
+    fantasy_books_lookup: Optional[dict] = None,
+) -> dict:
+    """Serialize a RankedLeg for the dashboard JSON API.
+
+    fantasy_books_lookup: optional cross-reference of all observed fantasy legs,
+    keyed by (normalized_player, stat, line). When provided, the resulting dict
+    includes a `fantasy_books` entry of {book: true_prob for picked side} so
+    the UI can render per-fantasy-book columns (Underdog, PrizePicks, Sleeper).
+    """
     leg = r.leg
     reason = explain_pick(r, break_even=break_even)
 
@@ -308,6 +369,24 @@ def opportunities_to_dict(r: RankedLeg, break_even: float = 0.524) -> dict:
         ),
         "fantasy_source": fantasy_source,
         "available_copy_platforms": available_platforms,
+        # Dashboard v2: per-book sharp dict {book: true_prob} for the picked side,
+        # plus fantasy_only flag when no sharp book matched the leg.
+        "sharp_books": {
+            book: round(entry[r.picked_side], 4)
+            for book, entry in (r.sharp_books_per_book or {}).items()
+            if r.picked_side in entry
+        },
+        "fantasy_only": not bool(r.sharp_books_per_book),
+        "fantasy_only_reason": (
+            "no sharp book offered this player/stat/line" if not r.sharp_books_per_book else ""
+        ),
+        # Dashboard v2: per-fantasy-book view. Walks fantasy_books_lookup for
+        # the same (player, stat, line) on other fantasy sources, returning
+        # {underdog, prizepicks, sleeper} of true_probs for the picked side.
+        # Always includes the leg's own source (underdog by default).
+        "fantasy_books": _build_fantasy_books(
+            r, leg, fantasy_books_lookup=fantasy_books_lookup
+        ),
         "reason": reason,
         "copy": copy,
     }

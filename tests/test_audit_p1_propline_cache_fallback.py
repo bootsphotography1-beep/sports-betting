@@ -20,7 +20,6 @@ from ud_edge.propline_client import (
     load_cached_indexes,
     build_propline_indexes,
     fantasy_props_to_legs,
-    parse_event_odds,
 )
 from tests.test_propline import SAMPLE_EVENT
 

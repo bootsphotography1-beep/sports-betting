@@ -17,6 +17,17 @@ from ud_edge.models import Leg, RankedLeg
 from ud_edge.safety_gate import safety_status
 from ud_edge.sharp_books_client import build_sharp_index
 from ud_edge.ud_client import UDClient, resolve_sport_filter
+import re as _re
+
+
+def _normalize_player_key(name: str) -> str:
+    """Lowercase + collapse whitespace + strip punctuation for fuzzy player match.
+    Mirror of ud_edge.copy_format._normalize_player_key — duplicated here to avoid
+    a circular import between compare.py and copy_format.py."""
+    s = (name or "").lower().strip()
+    s = _re.sub(r"[^\w\s]", "", s)
+    s = _re.sub(r"\s+", " ", s)
+    return s
 
 
 DEFAULT_SPORTS = ["NBA", "NFL", "MLB", "NHL", "WNBA", "CFB", "MLS", "EPL"]
@@ -63,6 +74,7 @@ def load_fantasy_csv_legs(csv_path: Path, source_name: str = "prizepicks") -> li
                 lower_american=-110,
                 lower_decimal=lower,
                 lower_multiplier=0.9,
+                fantasy_source=source_name,
             )
         )
     return legs
@@ -100,13 +112,33 @@ def collect_fantasy_legs(
     for path, source in fantasy_csvs or []:
         try:
             if path.exists():
-                csv_legs = load_fantasy_csv_legs(path, source_name=source)
+                csv_legs = load_fantasy_csv_legs(path, source=source)
                 if effective_filter:
                     csv_legs = [csv_lg for csv_lg in csv_legs if (csv_lg.sport_id or "") in effective_filter]
                 legs.extend(csv_legs)
                 meta["sources"][source] = meta["sources"].get(source, 0) + len(csv_legs)
         except Exception as e:
             meta["errors"].append(f"{source}: {e}")
+
+    # Dashboard v2: also auto-load PrizePicks + Sleeper CSVs from env vars
+    # so the matcher can build per-fantasy-book true_probs per leg.
+    for env_var, source_name in (
+        ("FANTASY_PP_CSV", "prizepicks"),
+        ("FANTASY_SL_CSV", "sleeper"),
+    ):
+        env_path = os.environ.get(env_var)
+        if not env_path:
+            continue
+        try:
+            p = Path(env_path)
+            if p.exists():
+                csv_legs = load_fantasy_csv_legs(p, source_name=source_name)
+                if effective_filter:
+                    csv_legs = [csv_lg for csv_lg in csv_legs if (csv_lg.sport_id or "") in effective_filter]
+                legs.extend(csv_legs)
+                meta["sources"][source_name] = meta["sources"].get(source_name, 0) + len(csv_legs)
+        except Exception as e:
+            meta["errors"].append(f"{source_name}({env_var}): {e}")
 
     return legs, meta
 
@@ -316,6 +348,14 @@ def compare_fantasy_vs_sharp(
         sport = (r.leg.sport_id or "UNK").upper()
         by_sport.setdefault(sport, []).append(r)
 
+    # Dashboard v2: build a per-fantasy-book lookup keyed by
+    # (normalized_player_name, stat_name, line_value) → list[Leg]. Used by
+    # opportunities_to_dict() to attach the fantasy_books per-book column.
+    fantasy_books_lookup: dict[tuple, list] = {}
+    for fl in legs:
+        key = (_normalize_player_key(fl.player_name), fl.stat_name, fl.line_value)
+        fantasy_books_lookup.setdefault(key, []).append(fl)
+
     sports_payload = []
     for sport in sorted(by_sport.keys()):
         sport_legs = by_sport[sport]
@@ -326,7 +366,14 @@ def compare_fantasy_vs_sharp(
                 1 for r in sport_legs
                 if r.mispricing_edge_pp is not None and r.mispricing_edge_pp >= 2.0
             ),
-            "opportunities": [opportunities_to_dict(r, break_even=entry.break_even) for r in sport_legs],
+            "opportunities": [
+                opportunities_to_dict(
+                    r,
+                    break_even=entry.break_even,
+                    fantasy_books_lookup=fantasy_books_lookup,
+                )
+                for r in sport_legs
+            ],
             "copy": {
                 "prizepicks": format_block(sport_legs, "prizepicks", sport=sport),
                 "sleeper": format_block(sport_legs, "sleeper", sport=sport),
@@ -350,13 +397,33 @@ def compare_fantasy_vs_sharp(
             "win_prob": round(win_prob, 4) if win_prob else None,
             "median_payout": median_payout,
             "ev": round(ev, 4) if ev is not None else None,
-            "opportunities": [opportunities_to_dict(r, break_even=entry.break_even) for r in lineup],
+            "opportunities": [
+                opportunities_to_dict(
+                    r,
+                    break_even=entry.break_even,
+                    fantasy_books_lookup=fantasy_books_lookup,
+                )
+                for r in lineup
+            ],
             "copy": {
                 "prizepicks": format_block(lineup, "prizepicks", include_header=True),
                 "sleeper": format_block(lineup, "sleeper", include_header=True),
                 "underdog": format_block(lineup, "underdog", include_header=True),
             },
         })
+
+    # Dashboard v2: sort lineups by win_prob DESC (most-likely-first).
+    # Tie-break by avg_true_prob DESC, then by EV DESC.
+    lineup_payload.sort(
+        key=lambda lu: (
+            -(lu.get("win_prob") or 0.0),
+            -(lu.get("avg_true_prob") or 0.0),
+            -(lu.get("ev") or 0.0),
+        )
+    )
+    # Re-number after sort
+    for i, lu in enumerate(lineup_payload, 1):
+        lu["entry"] = i
 
     payload = {
         "fetched_at": datetime.now(timezone.utc).isoformat(),
@@ -380,7 +447,14 @@ def compare_fantasy_vs_sharp(
         "sharp_meta": sharp_meta,
         "sports": sports_payload,
         "lineups": lineup_payload,
-        "flat": [opportunities_to_dict(r, break_even=entry.break_even) for r in ranked],
+        "flat": [
+            opportunities_to_dict(
+                r,
+                break_even=entry.break_even,
+                fantasy_books_lookup=fantasy_books_lookup,
+            )
+            for r in ranked
+        ],
         "copy_all": {
             "prizepicks": format_block(ranked, "prizepicks"),
             "sleeper": format_block(ranked, "sleeper"),

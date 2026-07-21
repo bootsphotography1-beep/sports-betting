@@ -764,3 +764,79 @@ def find_sharp_match(
         )
 
     return None
+
+
+def find_all_sharp_matches(
+    sharp_index: dict[str, dict],
+    player_name: str,
+    stat_name: str,
+    line_value: float,
+    line_tolerance: float = 0.5,
+    event_title: Optional[str] = None,
+    scheduled_at: Optional[str] = None,
+) -> dict[str, dict[str, float]]:
+    """Return ALL sharp-book matches for a fantasy prop, grouped by bookmaker.
+
+    Unlike find_sharp_match() which returns a single best match, this walks
+    every sharp index entry matching the player/stat/line within tolerance
+    and returns {bookmaker: {side: true_prob}} so the dashboard can render
+    per-book columns.
+
+    Returns a dict keyed by bookmaker title (e.g. "pinnacle", "circa"), with
+    values {"higher": float, "lower": float, "line_value": float, "match_distance": float}.
+    Empty dict when no matches exist.
+    """
+    from ud_edge.no_vig import no_vig
+
+    if not sharp_index:
+        return {}
+
+    norm_player = _normalize_name(player_name)
+    canon_stat = canonicalize_stat(stat_name)
+
+    out: dict[str, dict[str, float]] = {}
+
+    # Walk ALL keys in the index, find ones that match this player + stat
+    # (and optionally the event). Player|stat key building is shared with
+    # the single-match function, but we don't filter by line in the key —
+    # we filter by line tolerance on each candidate.
+    for key, sharp in sharp_index.items():
+        # Keys look like "player|stat|event_title" or "player|stat"
+        parts = key.split("|")
+        if len(parts) < 2:
+            continue
+        key_player = _normalize_name(parts[0])
+        key_stat = canonicalize_stat(parts[1])
+        if key_player != norm_player or key_stat != canon_stat:
+            continue
+        # Dashboard v2: accept matches across ALL events (real sharp data has
+        # 1 book per (player|stat|event), but multiple books offer the same
+        # player/stat at similar lines across the day's slate). The single
+        # best match still uses event_title filtering in find_sharp_match().
+        _ = _normalize_name(parts[2]) if len(parts) >= 3 else ""
+
+        lv = sharp.get("line_value")
+        if lv is None:
+            continue
+        lv_f = float(lv)
+        if abs(lv_f - line_value) > line_tolerance:
+            continue
+
+        try:
+            s_over, s_under, _ = no_vig(sharp["over_decimal"], sharp["under_decimal"])
+        except (ValueError, KeyError):
+            continue
+
+        book = sharp.get("bookmaker", "sharp")
+        # If same bookmaker appears twice (multi-event), keep the closest line
+        if book in out:
+            if abs(out[book]["line_value"] - line_value) <= abs(lv_f - line_value):
+                continue
+        out[book] = {
+            "higher": float(s_over),
+            "lower": float(s_under),
+            "line_value": lv_f,
+            "match_distance": abs(lv_f - line_value),
+        }
+
+    return out

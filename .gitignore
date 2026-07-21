@@ -19,3 +19,7 @@ reports/
 !data/*.csv
 data/sharp_cache/
 data/alerts.jsonl
+
+# Scratch/debug dumps (added 2026-07-21)
+morning_body.txt
+opp.json

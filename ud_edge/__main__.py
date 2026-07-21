@@ -8,6 +8,7 @@ Examples:
 """
 from __future__ import annotations
 import argparse
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -521,6 +522,24 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, IndexError) as e:
             print(f"✗ Bad --settle format: {e}. Expected '<index>:<hit|miss>:<actual_stat>'")
             return 1
+
+    # ── Cron-only guard on --once (audit 2026-07-21) ──────────────────────
+    # The poller (--poll) is the long-running mode and fires on cron.
+    # --once is interactive-only and burns PropLine budget (80-200 calls
+    # per run, ~$0.10 of monthly cap at 5000/day) — accidental double-fires
+    # on cron would silently waste the daily budget. Require explicit
+    # opt-in via UD_EDGE_ALLOW_ONCE=1 in the calling shell.
+    # --self-test, --dry-run, --snapshot, --stale-report, --poll, --poll-once,
+    # --calibration, --settle, and --serve are NOT guarded: they don't
+    # make live API calls, or they are the intended long-running paths.
+    if args.once and os.environ.get("UD_EDGE_ALLOW_ONCE", "").strip() != "1":
+        print(
+            "✗ --once is interactive-only and would burn daily PropLine budget.\n"
+            "  Set UD_EDGE_ALLOW_ONCE=1 in the environment to run a one-shot:\n"
+            "    UD_EDGE_ALLOW_ONCE=1 python -m ud_edge --once --entry 6-flex\n"
+            "  For scheduled runs, use the poller (--poll) on cron instead."
+        )
+        return 2
 
     cache_path = Path(args.cache)
     save_path = Path(args.save) if args.save else None
