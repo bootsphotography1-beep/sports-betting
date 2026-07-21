@@ -3,12 +3,12 @@
 Reads TELEGRAM_BOT_TOKEN/CHAT_ID from .env, force-refreshes the dashboard
 cache (which triggers a live PropLine pull with PROPLINE_API_KEY), runs
 compare_fantasy_vs_sharp, formats the message with priority tiers + a
-per-book breakdown (Underdog / PrizePicks / Sleeper), and sends via Telegram.
+per-book breakdown (Underdog / PrizePicks / Sleeper / Dabble), and sends via Telegram.
 
 NO CSVs. NO clipboard. NO manual ingest. Everything flows through PropLine.
 
 Per-book aggregation uses fuzzy matching (player name + stat + line ± 0.5)
-across all fantasy books so we don't lose PP/Sleeper coverage due to
+across all fantasy books so we don't lose PP/Sleeper/Dabble coverage due to
 line-value drift between books.
 
 Timezone: server runs in Pacific. User is in Central (CT = PT + 1h during PDT,
@@ -330,8 +330,8 @@ def format_message(tier: str, legs: list[dict]) -> str:
             watch.append(leg)
 
     # Book + sport breakdowns
-    BOOK_ORDER = {"underdog": 0, "prizepicks": 1, "sleeper": 2}
-    book_counts = {"underdog": 0, "prizepicks": 0, "sleeper": 0}
+    BOOK_ORDER = {"underdog": 0, "prizepicks": 1, "sleeper": 2, "dabble": 3}
+    book_counts = {"underdog": 0, "prizepicks": 0, "sleeper": 0, "dabble": 0}
     sport_counts: dict[str, int] = defaultdict(int)
     for leg in kept_legs:
         bk = leg.get("fantasy_book", "").lower()
@@ -398,7 +398,7 @@ def format_message(tier: str, legs: list[dict]) -> str:
     # Sport + book breakdown
     sport_str = " ".join(f"{s}={c}" for s, c in sorted(sport_counts.items()))
     msg_lines += [
-        f"*BOOK BREAKDOWN:* UD={book_counts['underdog']} PP={book_counts['prizepicks']} SL={book_counts['sleeper']} (legs that book covered)",
+        f"*BOOK BREAKDOWN:* UD={book_counts['underdog']} PP={book_counts['prizepicks']} SL={book_counts['sleeper']} DA={book_counts['dabble']} (legs that book covered)",
         f"*SPORT MIX:* {sport_str or '(none)'}",
         f"*VERDICT:* {len(kept_legs)} picks | {len(fighting_legs)} corr-warn | dashboard: {DASHBOARD}",
     ]
@@ -564,7 +564,7 @@ def correlation_group(legs: list[dict]) -> tuple[list[dict], list[dict]]:
 
     # Sort grouped legs by match (positive-pair groupings cluster together),
     # tie-break by book (UD → PP → SL), then by EV desc.
-    BOOK_ORDER = {"underdog": 0, "prizepicks": 1, "sleeper": 2}
+    BOOK_ORDER = {"underdog": 0, "prizepicks": 1, "sleeper": 2, "dabble": 3}
     grouped.sort(
         key=lambda leg: (
             (leg.get("match_title") or ""),

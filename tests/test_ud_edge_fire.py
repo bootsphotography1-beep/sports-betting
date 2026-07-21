@@ -207,8 +207,10 @@ def test_correlation_group_different_games_are_independent():
 
 
 def test_format_message_groups_by_book_UD_PP_SL():
-    """Within each tier, all UD picks appear before all PP, all PP before SL."""
+    """Within each tier, all UD picks appear before all PP, all PP before SL, all SL before DA."""
     legs = [
+        _make_leg("MLB", "DA_Pick", ev=6.5, edge_kind="vs_sharp",
+                  fantasy_book="dabble", stat="hits"),
         _make_leg("MLB", "PP_Pick", ev=6.0, edge_kind="vs_sharp",
                   fantasy_book="prizepicks", stat="hits"),
         _make_leg("MLB", "SL_Pick", ev=5.5, edge_kind="vs_sharp",
@@ -222,8 +224,10 @@ def test_format_message_groups_by_book_UD_PP_SL():
     ud_pos = p1_section.find("UD_Pick")
     pp_pos = p1_section.find("PP_Pick")
     sl_pos = p1_section.find("SL_Pick")
-    assert ud_pos < pp_pos < sl_pos, (
-        f"Expected UD < PP < SL in P1; got UD={ud_pos}, PP={pp_pos}, SL={sl_pos}"
+    da_pos = p1_section.find("DA_Pick")
+    assert ud_pos < pp_pos < sl_pos < da_pos, (
+        f"Expected UD < PP < SL < DA in P1; got UD={ud_pos}, PP={pp_pos}, "
+        f"SL={sl_pos}, DA={da_pos}"
     )
 
 
@@ -444,3 +448,47 @@ def test_default_budget_per_fire_is_1000():
     """The default budget per fire (1000) × 6 fires = 6000 = full combined budget."""
     assert ud_edge_fire.DEFAULT_BUDGET_PER_FIRE == 1000
     assert ud_edge_fire.DEFAULT_BUDGET_PER_FIRE * 6 == 6000
+
+
+# ── Test 8: Dabble support (added 2026-07-21) ──────────────────────────
+
+
+def test_dabble_appears_in_book_breakdown():
+    """Dabble legs must appear in the BOOK BREAKDOWN line as DA=N.
+
+    Both legs need to clear the WNBA per-sport min_edge threshold (4.0pp).
+    Stewart at 3.5pp would be filtered, so use 5.0pp+ edges for both.
+    """
+    legs = [
+        _make_leg("WNBA", "Aja Wilson", ev=5.5, edge_kind="vs_sharp",
+                  fantasy_book="dabble", fantasy_prob=60.0,
+                  sharp_book="pinnacle", sharp_prob=66.0, stat="points", line=22.5),
+        _make_leg("WNBA", "Stewart", ev=5.0, edge_kind="vs_sharp",
+                  fantasy_book="underdog", fantasy_prob=58.0,
+                  sharp_book="draftkings", sharp_prob=63.0, stat="rebounds", line=8.5),
+    ]
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "DA=1" in msg, f"BOOK BREAKDOWN should include DA=1 for the Dabble leg. Got: {msg}"
+    assert "UD=1" in msg
+
+
+def test_dabble_in_FANTASY_BOOKS():
+    """ud_edge.propline_client.FANTASY_BOOKS must include 'dabble'."""
+    from ud_edge.propline_client import FANTASY_BOOKS
+    assert "dabble" in FANTASY_BOOKS, (
+        f"FANTASY_BOOKS missing 'dabble': {FANTASY_BOOKS}. "
+        "PropLine returns Dabble in WNBA events (verified 2026-07-21)."
+    )
+
+
+def test_dabble_unknown_book_does_not_crash():
+    """Unknown fantasy books (e.g. hypothetical 'kalshi') must not crash BOOK_ORDER.get()."""
+    legs = [
+        _make_leg("WNBA", "Mystery", ev=5.0, edge_kind="vs_sharp",
+                  fantasy_book="unknown_book", fantasy_prob=60.0,
+                  sharp_book="pinnacle", sharp_prob=64.0),
+    ]
+    # Should not raise — unknown books sort after the 4 known ones (key=99)
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "DA=0" in msg
+    assert "UD=0" in msg

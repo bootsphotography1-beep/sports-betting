@@ -75,7 +75,7 @@ SHARP_BOOK_PRIORITY = (
     "williamhill_us",
 )
 
-FANTASY_BOOKS = ("prizepicks", "underdog", "sleeper")
+FANTASY_BOOKS = ("prizepicks", "underdog", "sleeper", "dabble")
 
 
 class PropLineClient:
