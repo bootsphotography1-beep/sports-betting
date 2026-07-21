@@ -46,6 +46,7 @@ def _make_leg(
     match_title: str = "Game X",
     stat: str = "points",
     line: float = 1.5,
+    scheduled_at: str = "",
 ) -> dict:
     """Build a leg dict in the shape parse_legs produces."""
     return {
@@ -66,6 +67,7 @@ def _make_leg(
         "all_fantasy_books": {fantasy_book: fantasy_prob / 100.0},
         "all_sharp_books": {sharp_book: sharp_prob / 100.0} if edge_kind == "vs_sharp" else {},
         "match_title": match_title,
+        "scheduled_at": scheduled_at,
         "sport": sport,
     }
 
@@ -564,6 +566,59 @@ def test_format_message_no_discrepancy_tag_when_normal():
     assert "NormalEdge" in msg
     assert "LAGGED" not in msg
     assert "STALE LINE" not in msg
+
+
+# ── Test 11: game-time tag (added 2026-07-21 to surface tip-off time) ──
+
+
+def test_format_message_shows_game_time_tag():
+    """Each leg with scheduled_at gets a clock3:TODAY/TOMORROW/STARTED tag
+    so the operator knows if Less is still placeable or about to lock."""
+    from datetime import datetime, timezone, timedelta
+    # Game starting 2 hours from now → TODAY tag
+    in_2h = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    legs = [_make_leg("MLB", "Ezequiel Tovar", ev=6.0, edge_kind="vs_sharp",
+                      fantasy_book="sleeper", fantasy_prob=60.0,
+                      sharp_book="pinnacle", sharp_prob=63.0,
+                      stat="total_bases", line=1.5,
+                      scheduled_at=in_2h)]
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "Ezequiel Tovar" in msg
+    assert ":clock3:" in msg or "TODAY" in msg or "TOMORROW" in msg or "STARTED" in msg
+
+
+def test_format_message_drops_imminent_legs():
+    """Legs whose game starts in <30 min are dropped — Less side likely locked."""
+    from datetime import datetime, timezone, timedelta
+    # Game starting in 10 minutes → drop
+    in_10min = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    # Game starting in 2 hours → keep
+    in_2h = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    legs = [
+        _make_leg("MLB", "Imminent", ev=5.0, edge_kind="vs_sharp",
+                  fantasy_book="sleeper", fantasy_prob=60.0,
+                  sharp_book="pinnacle", sharp_prob=63.0,
+                  stat="hits", line=1.5, scheduled_at=in_10min),
+        _make_leg("MLB", "Future", ev=5.0, edge_kind="vs_sharp",
+                  fantasy_book="sleeper", fantasy_prob=60.0,
+                  sharp_book="pinnacle", sharp_prob=63.0,
+                  stat="hits", line=1.5, scheduled_at=in_2h),
+    ]
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "Imminent" not in msg, "Legs <30min to tip must be dropped"
+    assert "Future" in msg, "Legs >30min to tip must be kept"
+
+
+def test_format_message_keeps_legs_without_scheduled_at():
+    """Backward compat: legs without scheduled_at pass through (no imminent filter)."""
+    legs = [
+        _make_leg("MLB", "NoTime", ev=5.0, edge_kind="vs_sharp",
+                  fantasy_book="sleeper", fantasy_prob=60.0,
+                  sharp_book="pinnacle", sharp_prob=63.0,
+                  stat="hits", line=1.5, scheduled_at=""),
+    ]
+    msg = ud_edge_fire.format_message("ud_morning", legs)
+    assert "NoTime" in msg
 
 
 # ── Test 10: destination-book proximity logic (2026-07-21 fix) ─────────

@@ -277,6 +277,7 @@ def parse_legs(payload: dict, fantasy_lookup: dict) -> list[dict]:
                 "all_fantasy_books": merged_fb,
                 "all_sharp_books": sharp_books_clean,
                 "match_title": opp.get("match_title", ""),
+                "scheduled_at": opp.get("scheduled_at", ""),
                 "sport": sport.get("sport", ""),
             })
     return legs
@@ -322,6 +323,7 @@ def format_message(tier: str, legs: list[dict]) -> str:
     # during sparse-prop windows.
     kept_legs = []
     sharp_only_dropped = 0
+    imminent_dropped = 0
     for leg in legs:
         if leg.get("edge_kind") != "vs_sharp":
             sharp_only_dropped += 1
@@ -331,10 +333,30 @@ def format_message(tier: str, legs: list[dict]) -> str:
             continue  # fantasy is overpriced; skip
         if ev < _min_edge_for(leg):
             continue
+        # Drop picks where the game is starting in <30 minutes — fantasy
+        # books typically lock the Less side 30-60 min before tip as
+        # lineups confirm, making these unplaceable on the app.
+        scheduled = leg.get("scheduled_at", "")
+        if scheduled:
+            try:
+                from datetime import datetime
+                from zoneinfo import ZoneInfo
+                ct = datetime.fromisoformat(scheduled.replace("Z", "+00:00"))
+                ct_local = ct.astimezone(ZoneInfo("America/Chicago"))
+                now_local = datetime.now(ZoneInfo("America/Chicago"))
+                mins_to_tip = int((ct_local - now_local).total_seconds() / 60)
+                if mins_to_tip < 30:
+                    imminent_dropped += 1
+                    continue
+            except Exception:
+                pass  # if parse fails, keep the leg
         kept_legs.append(leg)
     if sharp_only_dropped:
         print(f"[ud_edge_fire] dropped {sharp_only_dropped} fantasy-only legs "
               f"(sharp-only filter, 2026-07-21 Fin spec)")
+    if imminent_dropped:
+        print(f"[ud_edge_fire] dropped {imminent_dropped} imminent legs "
+              f"(<30 min to tip; Less side likely locked)")
 
     # Correlation grouping: cluster same-match positive-ρ legs together
     # and pull fighting pairs (same-game, same-stat, opposite sides) into a
@@ -368,6 +390,41 @@ def format_message(tier: str, legs: list[dict]) -> str:
 
     def _book_sort_key(leg):
         return (BOOK_ORDER.get(leg["fantasy_book"].lower(), 99), -leg["ev"])
+
+    def _format_game_time(iso_str: str) -> str:
+        """Format ISO8601 scheduled_at as 'TODAY 17:40 CT' or 'TOMORROW 19:05 CT'.
+
+        Helps the operator see if the game is hours away (still placeable) or
+        imminent (less side may be locked). Falls back to raw string if parse
+        fails.
+        """
+        if not iso_str:
+            return ""
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            ct = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+            ct_local = ct.astimezone(ZoneInfo("America/Chicago"))
+            now_local = datetime.now(ZoneInfo("America/Chicago"))
+            days_diff = (ct_local.date() - now_local.date()).days
+            if days_diff == 0:
+                tag = f"TODAY {ct_local.strftime('%H:%M')} CT"
+            elif days_diff == 1:
+                tag = f"TOMORROW {ct_local.strftime('%H:%M')} CT"
+            elif days_diff > 1:
+                tag = f"in {days_diff}d {ct_local.strftime('%H:%M')} CT"
+            else:
+                # Past — game already started/finished; flag as such
+                tag = f"STARTED {ct_local.strftime('%H:%M')} CT"
+            # How many minutes until tip
+            mins_to_tip = int((ct_local - now_local).total_seconds() / 60)
+            if mins_to_tip >= 0:
+                tag += f" (in {mins_to_tip}min)"
+            else:
+                tag += f" ({abs(mins_to_tip)}min ago)"
+            return tag
+        except Exception:
+            return ""
 
     def fmt_leg(leg: dict) -> str:
         extras = ""
@@ -403,11 +460,19 @@ def format_message(tier: str, legs: list[dict]) -> str:
                 disc_tag = " — :fire:**STALE LINE**"
             elif gap_pp >= 10:
                 disc_tag = " — :mag:LAGGED"
+        # Game-start tag: tells operator when the game tips off so they know
+        # if the Less side is still available or about to be locked.
+        game_time_tag = ""
+        scheduled = leg.get("scheduled_at", "")
+        if scheduled:
+            formatted = _format_game_time(scheduled)
+            if formatted:
+                game_time_tag = f" :clock3:{formatted}"
         return (
             f"- {leg['player']} {leg['stat']} {leg['line']}{side_str}{match_str} → "
             f"BET ON **{leg['fantasy_book'].upper()}** "
             f"({leg['fantasy_prob']}%{sharp_str})"
-            f"{extras} — {edge_label} +{leg['ev']}pp{edge_kind_tag}{disc_tag}"
+            f"{extras} — {edge_label} +{leg['ev']}pp{edge_kind_tag}{disc_tag}{game_time_tag}"
         )
 
     # Sort each tier by book (UD → PP → SL) so the operator can place
